@@ -11,6 +11,7 @@ StrictDays = Annotated[int | None, Field(strict=True)]
 
 def get_preferences(app) -> dict:
     """The coaching memory: goal, training days, session length, load anchors, owned equipment,
+    unusable_equipment (gear they own but CANNOT use — never plan a movement needing it),
     ★preferred / ⊘avoided exercises, and the ACTIVE curated facts grouped as `facts`:
     constraints{hard, soft}, preferences, goals, observations (10 most recent), conflicts, legacyToReview and
     legacyUnreviewed (old free-form facts not yet curated — they may still bind: treat injury ones as hard
@@ -26,13 +27,17 @@ def get_preferences(app) -> dict:
 
 def set_preferences(app, goal: str | None = None, training_days: list[str] | None = None,
                     session_minutes: int | None = None, load_anchors: dict[str, float | None] | None = None,
-                    owned_equipment: list[str] | None = None) -> dict:
+                    owned_equipment: list[str] | None = None,
+                    unusable_equipment: list[str] | None = None) -> dict:
     """Update structured preferences (only the fields given change). load_anchors maps group_id -> a
     known working weight in displayUnit and is MERGED into the saved anchors (other anchors are kept);
     a weight of null or 0 removes that anchor. owned_equipment is a list of accessory names from
-    list_accessories (it replaces the saved list). Free-text facts go in remember_fact instead."""
+    list_accessories (it replaces the saved list). unusable_equipment names gear the user OWNS but
+    cannot use (an injury, a bench they can't lie on): movements needing it are hidden from
+    list_exercises and must never be planned. Free-text facts go in remember_fact instead."""
     fields = {"goal": goal, "training_days": training_days, "session_minutes": session_minutes,
-              "load_anchors": load_anchors, "owned_equipment": owned_equipment}
+              "load_anchors": load_anchors, "owned_equipment": owned_equipment,
+              "unusable_equipment": unusable_equipment}
     try:
         return {"preferences": app.memory.set_preferences(**{k: v for k, v in fields.items() if v is not None})}
     except ValueError as exc:

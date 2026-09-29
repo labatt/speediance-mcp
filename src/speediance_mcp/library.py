@@ -69,9 +69,12 @@ def resolve_exercise(items: list[dict], name: str) -> tuple[dict | None, list[di
 
 def filter_exercises(items: list[dict], *, query: str = "", muscle: str = "", category: str = "",
                      equipment: str = "", kind: str = "", owned: list[str] | None = None, owned_only: bool = False,
-                     marks: dict | None = None, include_avoided: bool = False, limit: int = 60) -> list[dict]:
+                     marks: dict | None = None, include_avoided: bool = False, limit: int = 60,
+                     unusable: list[str] | None = None) -> list[dict]:
     marks = marks or {}
     owned_set = {_norm(o) for o in (owned or [])}
+    # Equipment owned but unusable is worse than unowned: the move looks available.
+    unusable_set = {_norm(u) for u in (unusable or [])}
     words = _norm(query).split()
     out = []
     for item in items:
@@ -89,6 +92,8 @@ def filter_exercises(items: list[dict], *, query: str = "", muscle: str = "", ca
         if equipment and not any(_norm(equipment) in _norm(e) for e in item["equipment"]):
             continue
         if owned_only and not all(_norm(e) in owned_set for e in item["equipment"]):
+            continue
+        if unusable_set and any(_norm(e) in unusable_set for e in item["equipment"]):
             continue
         out.append({**item, "mark": mark})
     out.sort(key=lambda i: (i["mark"] != "preferred", i["name"].lower()))

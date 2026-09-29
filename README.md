@@ -253,7 +253,7 @@ data dir; `create_workout` and `update_workout` flag any avoided exercise they w
 | `unschedule_workout` | Take a workout off a day |
 | `browse_programs` | Speediance's official programs |
 | `get_preferences` | The coaching memory |
-| `set_preferences` | Goal, training days, session length, load anchors, owned equipment |
+| `set_preferences` | Goal, training days, session length, load anchors, owned and unusable equipment |
 | `remember_fact` | Save one curated fact: a hard/soft constraint, preference, goal or observation (max 600 characters; near-duplicates are refused; `supersedes` replaces older facts) |
 | `forget_fact` | Archive a fact that no longer applies (kept in the history) |
 | `list_facts` | Audit the facts, optionally with the full history of superseded, forgotten and expired ones |

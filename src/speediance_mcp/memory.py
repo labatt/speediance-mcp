@@ -83,7 +83,7 @@ LEGACY_HINT = ("legacyUnreviewed lists facts from the old free-form store that n
                "several pieces that each list supersedes=[its id] in ONE import_facts call — and forget_fact the "
                "rest.")
 PREF_DEFAULTS = {"goal": None, "training_days": [], "session_minutes": None,
-                 "load_anchors": {}, "owned_equipment": []}
+                 "load_anchors": {}, "owned_equipment": [], "unusable_equipment": []}
 MARKS = ("preferred", "avoided")
 
 
@@ -360,9 +360,11 @@ def _validate(key: str, value):
             return {str(int(k)): (None if v is None or float(v) == 0 else float(v)) for k, v in value.items()}
         except (TypeError, ValueError) as exc:
             raise ValueError("load_anchors must map a numeric group_id to a numeric weight") from exc
-    if key == "owned_equipment":
+    if key in ("owned_equipment", "unusable_equipment"):
+        # unusable_equipment is the "own it, can't use it" list: a flat bench someone
+        # cannot lie on is still owned, but must never be planned into a workout.
         if not isinstance(value, list):
-            raise ValueError("owned_equipment must be a list of accessory names")
+            raise ValueError(f"{key} must be a list of accessory names")
         return [str(n).strip() for n in value if str(n).strip()]
     raise ValueError(f"unknown preference: {key}")
 

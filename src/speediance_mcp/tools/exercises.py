@@ -16,17 +16,20 @@ def list_exercises(app, query: str = "", muscle: str = "", category: str = "", e
     (`muscle`, e.g. "chest", "biceps"), library tab (`category`), equipment name, `kind`
     ("reps", "timed" or "level" for Vita), and
     `owned_only` (only moves whose equipment you own — set it with set_preferences(owned_equipment)).
+    Movements needing equipment listed in set_preferences(unusable_equipment) are ALWAYS hidden.
     ⊘avoided movements are hidden unless include_avoided=true; ★preferred ones sort first.
     The first call downloads the library (~30 s); later calls use a 24-hour cache."""
     items = library_items(app)
     marks = app.memory.marks()
-    owned = app.memory.preferences()["owned_equipment"]
+    preferences = app.memory.preferences()
+    owned = preferences["owned_equipment"]
+    unusable = preferences["unusable_equipment"]
     if owned_only and not owned:
         raise ToolError("No owned equipment is saved yet. Call list_accessories, then "
                         "set_preferences(owned_equipment=[names]).")
     rows = filter_exercises(items, query=query, muscle=muscle, category=category, equipment=equipment,
                             kind=kind, owned=owned, owned_only=owned_only, marks=marks, include_avoided=include_avoided,
-                            limit=max(1, min(int(limit), 200)))
+                            limit=max(1, min(int(limit), 200)), unusable=unusable)
     return {"count": len(rows), "displayUnit": app.api.unit,
             "exercises": [{k: row[k] for k in LIST_FIELDS} for row in rows]}
 
@@ -68,8 +71,10 @@ def mark_exercise(app, mark: str, group_id: int = 0, name: str = "", reason: str
 
 def list_accessories(app) -> dict:
     """Speediance's accessory catalog (bars, handles, rope, benches, AeroRow...), deduplicated by name,
-    each flagged `owned`. Save what the user owns with set_preferences(owned_equipment=[names])."""
-    owned = {o.lower() for o in app.memory.preferences()["owned_equipment"]}
+    each flagged `owned` and `usable`. Save what the user owns with set_preferences(owned_equipment=[names])."""
+    preferences = app.memory.preferences()
+    owned = {o.lower() for o in preferences["owned_equipment"]}
+    unusable = {u.lower() for u in preferences["unusable_equipment"]}
     by_name: dict[str, dict] = {}
     for item in app.api.accessories():
         name = str(item.get("name", "")).strip()
@@ -78,10 +83,13 @@ def list_accessories(app) -> dict:
         entry = by_name.setdefault(name.lower(), {"name": name, "ids": [],
                                                   "type": "furniture" if item.get("type") == 1 else "attachment"})
         entry["ids"].append(item.get("id"))
-    rows = [{**e, "owned": e["name"].lower() in owned} for e in sorted(by_name.values(), key=lambda e: e["name"].lower())]
+    rows = [{**e, "owned": e["name"].lower() in owned, "usable": e["name"].lower() not in unusable}
+            for e in sorted(by_name.values(), key=lambda e: e["name"].lower())]
     return {"accessories": rows,
             "hint": "Save owned items with set_preferences(owned_equipment=[names]); "
-                    "list_exercises(owned_only=true) then hides moves needing anything else."}
+                    "list_exercises(owned_only=true) then hides moves needing anything else. "
+                    "Gear owned but unusable goes in set_preferences(unusable_equipment=[names]) — "
+                    "those movements are hidden everywhere and must never be planned."}
 
 
 def get_exercise_history(app, exercise: str = "", groupId: int = 0, limit: int = 50) -> dict:
