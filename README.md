@@ -236,6 +236,7 @@ data dir; `create_workout` and `update_workout` flag any avoided exercise they w
 | `get_training_stats` | Totals between two dates |
 | `get_athlete_snapshot` | Profile, coaching memory and recent sessions in one call |
 | `get_strength_profile` | Estimated 1RM per recently trained movement |
+| `get_muscle_balance` | Which muscles the recent work loaded, push:pull and upper:lower, and what's been missed |
 | `compare_sessions` | A session versus the previous one, per movement |
 | `suggest_load` | A working weight for a rep target, with its reasoning |
 | `list_exercises` | Search the exercise library (body part, equipment, what you own) |
@@ -263,8 +264,9 @@ data dir; `create_workout` and `update_workout` flag any avoided exercise they w
 `get_session_detail`, `get_exercise_history`, `get_athlete_snapshot`, `get_strength_profile`, `list_exercises`,
 `mark_exercise`, `list_my_workouts`, `get_workout`, `create_workout`, `update_workout`, `delete_workout`,
 `schedule_workout`, `suggest_load`, `get_preferences`, `set_preferences`, `remember_fact` and `forget_fact`.
-The other 9 are new: `get_heart_rate`, `get_training_stats`, `compare_sessions`, `get_exercise`,
-`list_accessories`, `unschedule_workout`, `browse_programs`, `list_facts` and `import_facts`. `set_preferences`,
+The other 10 are new: `get_heart_rate`, `get_training_stats`, `compare_sessions`, `get_exercise`,
+`list_accessories`, `unschedule_workout`, `browse_programs`, `list_facts`, `import_facts` and
+`get_muscle_balance`. `set_preferences`,
 `suggest_load` and `create_workout` take simpler inputs: typed preference fields instead of one JSON blob, and
 no Dynamic Weight modes or RM presets yet. `remember_fact` and `forget_fact` differ from GM Manager's (see
 below).

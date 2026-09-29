@@ -61,6 +61,7 @@ TOOLS = (
     account.check_connection,
     sessions.get_calendar, sessions.get_session_detail, sessions.get_heart_rate, sessions.get_training_stats,
     coaching.get_athlete_snapshot, coaching.get_strength_profile, coaching.compare_sessions, coaching.suggest_load,
+    coaching.get_muscle_balance,
     exercises.list_exercises, exercises.get_exercise, exercises.mark_exercise, exercises.list_accessories,
     exercises.get_exercise_history,
     workouts.list_my_workouts, workouts.get_workout, workouts.create_workout, workouts.update_workout,

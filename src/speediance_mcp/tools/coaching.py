@@ -4,6 +4,7 @@ import datetime as dt
 
 from mcp.server.mcpserver.exceptions import ToolError
 
+from ..speediance.muscles import attribute, muscle_index, ratios, untrained
 from ..speediance.parsing import epley, round_half
 from ._common import is_health_import, other_activity, record_summary, resolve_group, session_exercises
 
@@ -205,3 +206,42 @@ def suggest_load(app, reps: int, exercise: str = "", groupId: int = 0, rir: int 
     return {**out, "suggestedWeight": None, "basis": None,
             "note": "No history or load anchor for this movement yet. Start light, or save an anchor with "
                     "set_preferences(load_anchors={group_id: weight})."}
+
+
+MAX_BALANCE_SESSIONS = 40
+
+
+def get_muscle_balance(app, days: int = 30) -> dict:
+    """Which muscles the recent training actually loaded, and how balanced it was.
+
+    Spreads each weighted set's volume over the muscles the library says a movement works:
+    a MAIN muscle takes the full volume, an ASSISTING muscle half. Attributed totals
+    therefore exceed the weight actually lifted — they are shares of attention, not a
+    decomposition of load. Timed and level work (Vita, planks, rowing) carries no volume
+    and is reported as `unweightedExercises` rather than silently counted as zero.
+
+    `pushPull` and `upperLower` are ratios: 1.0 is balanced, above 1.0 favours push/upper.
+    `notTrained` lists muscles with no volume in the window — useful, but read it next to
+    `unweightedExercises` before concluding a muscle was neglected."""
+    days = max(1, min(int(days), 365))
+    records = _recent(app, days)[:MAX_BALANCE_SESSIONS]
+    index = muscle_index(app.api.library())
+    exercises: list[dict] = []
+    for record in records:
+        exercises.extend(_exercises(app, record))
+    spread = attribute(exercises, index)
+    by_muscle = spread["byMuscle"]
+    ranked = sorted(by_muscle.items(), key=lambda kv: kv[1], reverse=True)
+    return {
+        "windowDays": days,
+        "sessions": len(records),
+        "displayUnit": app.api.unit,
+        "attribution": "main muscle 100%, assisting muscle 50%",
+        "byMuscle": [{"muscle": m, "volume": v} for m, v in ranked],
+        "byBodyPart": [{"bodyPart": p, "volume": v} for p, v in
+                       sorted(spread["byBodyPart"].items(), key=lambda kv: kv[1], reverse=True)],
+        "ratios": ratios(by_muscle),
+        "notTrained": untrained(by_muscle, index),
+        "unweightedExercises": spread["unweightedExercises"],
+        "exercisesNotInLibrary": spread["exercisesNotInLibrary"],
+    }
