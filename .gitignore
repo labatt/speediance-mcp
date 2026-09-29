@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+credentials.json
+*.db
+*.db-journal
+library-*.json
+*.log
+.env
+.superpowers/
