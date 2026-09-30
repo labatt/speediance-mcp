@@ -107,7 +107,18 @@ def _list_set(kind: str, raw: dict, index: int) -> dict:
     return entry
 
 
-def _exercise(name, group_id, kind: str, entries: list[dict]) -> dict:
+# Speediance's own personal-best flags, one 0/1 per exercise on the custom-template route
+# (cttTrainingInfoDetail), verified live. Never seen on freeTraining or freeTrainingDetail
+# payloads, and never per set. Course and AI routes are unverified.
+PB_FLAGS = (("maxWeightPr", "weight"), ("totalCapacityPr", "volume"), ("oneRepMaxPr", "1RM"))
+
+
+def personal_bests(raw: dict) -> list[str]:
+    """The kinds of personal best Speediance flagged on one exercise, [] when none or absent."""
+    return [kind for key, kind in PB_FLAGS if _num(raw.get(key))]
+
+
+def _exercise(name, group_id, kind: str, entries: list[dict], pbs: list[str] | None = None) -> dict:
     worked = [e for e in entries if not e["skipped"]]
     for number, entry in enumerate(worked, 1):
         entry["setIndex"] = number
@@ -127,6 +138,7 @@ def _exercise(name, group_id, kind: str, entries: list[dict]) -> dict:
         "volume": round(volume, 1),
         "avgLoad": round(sum(weights) / len(weights), 1) if weights else None,
         "avgLoadEstimated": False,
+        "personalBests": pbs or [],
     }
 
 
@@ -139,7 +151,8 @@ def parse_list_exercises(payload) -> list[dict]:
         kind = kind_of(raw)
         entries = [_list_set(kind, s, i) for i, s in enumerate(raw.get("finishedReps") or [], 1)
                    if isinstance(s, dict)]
-        out.append(_exercise(raw.get("actionLibraryName"), raw.get("actionLibraryGroupId"), kind, entries))
+        out.append(_exercise(raw.get("actionLibraryName"), raw.get("actionLibraryGroupId"), kind, entries,
+                              personal_bests(raw)))
     return out
 
 

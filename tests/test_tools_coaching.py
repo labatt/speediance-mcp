@@ -69,6 +69,13 @@ class TestStrength(unittest.TestCase):
         fly = next(m for m in got["movements"] if m["name"] == "Cable Fly")
         self.assertIsNone(fly["previous"])
 
+    def test_compare_carries_personal_bests(self):
+        routes = fx.standard_routes()
+        routes[("GET", fx.DETAIL + "cttTrainingInfoDetail/5001")] = fx.CTT_5001_PB
+        app, _ = make_app(self, routes)
+        got = coaching.compare_sessions(app, 5001)
+        self.assertEqual(got["movements"][0]["current"]["personalBests"], ["weight", "volume"])
+
     def test_compare_skips_health_imports(self):
         routes = fx.standard_routes()
         imported = {"trainingId": 8000, "type": 5, "belongUserHealth": 1, "title": "Synced Workout",

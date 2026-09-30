@@ -86,3 +86,23 @@ class TestHeartRateAndStrength(unittest.TestCase):
         self.assertEqual(parsing.epley(0, 10), 0.0)
         self.assertEqual(parsing.round_half(47.49), 47.5)
         self.assertEqual(parsing.round_half(47.2), 47.0)
+
+
+class TestPersonalBests(unittest.TestCase):
+    def test_flags_become_kinds(self):
+        exercises = parsing.parse_list_exercises(fx.CTT_5001_PB)
+        self.assertEqual(exercises[0]["personalBests"], ["weight", "volume"])
+        self.assertEqual(exercises[1]["personalBests"], [])
+
+    def test_one_rep_max_flag(self):
+        raw = [{**fx.CTT_5001[0], "oneRepMaxPr": 1}]
+        self.assertEqual(parsing.parse_list_exercises(raw)[0]["personalBests"], ["1RM"])
+
+    def test_payloads_without_the_fields_still_parse(self):
+        for exercise in parsing.parse_list_exercises(fx.CTT_5001):
+            self.assertEqual(exercise["personalBests"], [])
+        self.assertEqual(parsing.parse_list_exercises(fx.QUICK_6002_DETAIL)[0]["personalBests"], [])
+
+    def test_free_lift_carries_none(self):
+        # The flags were never seen on freeTraining payloads, so they are always empty there.
+        self.assertEqual(parsing.parse_free_exercises(fx.FREE_6001)[0][0]["personalBests"], [])

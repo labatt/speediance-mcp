@@ -122,7 +122,8 @@ def _movements(app, record: dict) -> dict:
         out[exercise["groupId"] or exercise["name"]] = {
             "name": exercise["name"], "topWeight": exercise["topWeight"],
             "reps": sum(r or 0 for r in exercise["reps"]), "volume": exercise["volume"],
-            "sets": exercise["sets"], "skippedSets": exercise["skippedSets"]}
+            "sets": exercise["sets"], "skippedSets": exercise["skippedSets"],
+            "personalBests": exercise.get("personalBests", [])}
     return out
 
 
@@ -132,6 +133,7 @@ def _delta(current, previous):
 
 def compare_sessions(app, training_id: int, previous_training_id: int = 0) -> dict:
     """Compare a session with an earlier one, per movement: top weight, total reps and volume deltas.
+    Each side lists personalBests, Speediance's own flags as of that session (see get_session_detail).
     previous_training_id=0 picks the most recent earlier session that shares a movement."""
     current = app.api.find_session(training_id)
     current_moves = _movements(app, current)
