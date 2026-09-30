@@ -63,12 +63,23 @@ class TestExerciseTools(unittest.TestCase):
         self.assertTrue(rows["Handles"]["owned"])
         self.assertEqual(rows["Flat Bench"]["type"], "furniture")
 
-    def test_exercise_history(self):
+    def test_exercise_history_is_reported_as_weeks_not_sessions(self):
+        """These rows are WEEKLY buckets, and the reply must not call them sessions.
+
+        userActionStatPage returns one row per Sunday-to-Saturday week, labelled with that
+        week's Monday (verified live 2026-09-29). The reply used to name them `sessions`
+        and state "one entry per training day", which told the model a week's volume was a
+        single workout's.
+        """
         app, _ = make_app(self)
         got = exercises.get_exercise_history(app, exercise="bent over row")
-        self.assertEqual([s["date"] for s in got["sessions"]], ["2026-08-22", "2026-08-29"])
-        self.assertEqual(got["summary"]["bestWeight"], {"value": 50.0, "date": "2026-08-29"})
-        self.assertEqual(got["sessions"][0]["minWeight"], 30.0)
+        self.assertEqual(got["granularity"], "week")
+        self.assertEqual([w["weekStarting"] for w in got["weeks"]], ["2026-08-22", "2026-08-29"])
+        self.assertEqual(got["summary"]["bestWeight"], {"value": 50.0, "weekStarting": "2026-08-29"})
+        self.assertEqual(got["weeks"][0]["minWeight"], 30.0)
+        self.assertIn("weekVolume", got["weeks"][0])
+        self.assertNotIn("sessions", got, "a week is not a session")
+        self.assertIn("per WEEK", got["note"])
 
     def test_exercise_history_ambiguous_and_empty(self):
         app, _ = make_app(self)
@@ -76,7 +87,7 @@ class TestExerciseTools(unittest.TestCase):
         self.assertTrue(got["needsPick"])
         self.assertEqual(len(got["matches"]), 5)
         empty = exercises.get_exercise_history(app, groupId=424)
-        self.assertEqual((empty["sessions"], empty["summary"]["sessions"]), ([], 0))
+        self.assertEqual((empty["weeks"], empty["summary"]["weeks"]), ([], 0))
         with self.assertRaises(ToolError):
             exercises.get_exercise_history(app, exercise="squat")
 
@@ -87,4 +98,4 @@ class TestExerciseTools(unittest.TestCase):
             with self.subTest(limit=limit), \
                     mock.patch.object(app.api, "exercise_stats", return_value=[]) as stats:
                 exercises.get_exercise_history(app, groupId=321, limit=limit)
-                self.assertEqual(stats.call_args.kwargs["max_days"], expected)
+                self.assertEqual(stats.call_args.kwargs["max_weeks"], expected)

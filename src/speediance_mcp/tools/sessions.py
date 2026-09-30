@@ -3,11 +3,12 @@ from __future__ import annotations
 from mcp.server.mcpserver.exceptions import ToolError
 
 from ..speediance.api import SessionNotFound
+from ..speediance import offmachine as offmachine_adapt
 from ..speediance.parsing import (
     derive_cardio_stats, downsample, find_uuid, heart_rate_values, intervals_from, is_cardio,
     rowing_telemetry, session_uuid,
 )
-from ..speediance.routes import FREE_ROUTE
+from ..speediance.routes import FREE_ROUTE, MANUAL_TYPE
 from ._common import is_health_import, other_activity, parse_date, parse_month, session_exercises
 
 ROWING_GAP_NOTE = ("No per-interval detail for this session: it has no rowing telemetry and isn't a "
@@ -63,6 +64,28 @@ def get_session_detail(app, training_id: int, type: int = 0) -> dict:
                 "exercises": [],
                 "message": f"Session {training_id} isn't in this account's training history, so no detail was "
                            "fetched. Use a trainingId from get_calendar or get_athlete_snapshot."}
+    if record.get("type") == MANUAL_TYPE:
+        # Speediance stores no exercises for a manual record, but the user may have logged
+        # them with log_off_machine_workout. Serve those rather than an empty breakdown.
+        date = str(record.get("startTime", ""))[:10]
+        sets = app.memory.offmachine_for_session(training_id=record["trainingId"], day=date)
+        exercises = offmachine_adapt.as_exercises(sets)
+        out = {"trainingId": int(record["trainingId"]), "title": record.get("title"),
+               "date": date, "detailType": "manual",
+               "resolvedType": True, "sessionType": MANUAL_TYPE, "displayUnit": app.api.unit,
+               "exercises": exercises, "warnings": [],
+               "durationSec": int(record.get("trainingTime") or 0),
+               "calories": record.get("calorie"),
+               "exerciseSource": "offmachine" if exercises else "none"}
+        out["note"] = ("Logged off the machine. Speediance holds the day, duration and calories; the "
+                       "exercise detail below is from the user's own off-machine log, so it DOES count "
+                       "towards volume by muscle and personal bests."
+                       if exercises else
+                       "Logged off the machine through the Speediance app's manual entry. It counts as "
+                       "a trained day, but Speediance stores no exercises for a manual record. Offer to "
+                       "record what they did with log_off_machine_workout — that is what makes it count "
+                       "towards volume and personal bests.")
+        return out
     route, payload = app.api.session_payload(record)
     parsed = session_exercises(app, route, payload, record["trainingId"])
     if route == FREE_ROUTE and isinstance(payload, dict):

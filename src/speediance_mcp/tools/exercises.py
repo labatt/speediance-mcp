@@ -93,33 +93,44 @@ def list_accessories(app) -> dict:
 
 
 def get_exercise_history(app, exercise: str = "", groupId: int = 0, limit: int = 50) -> dict:
-    """EVERY time the user has done ONE movement, oldest -> newest: the "how is my bench press going?"
-    tool. Give the name as the user says it, or a groupId. If several exercises match, nothing is
-    fetched and the reply is {needsPick:true, matches:[...]} — ask which one. One entry per training
-    DAY (same-day sessions combined): topWeight, volume, and minWeight when the day had a range."""
+    """The long-run trend for ONE movement, oldest -> newest: the "how is my bench press going?" tool.
+    Give the name as the user says it, or a groupId. If several exercises match, nothing is fetched and
+    the reply is {needsPick:true, matches:[...]} — ask which one.
+
+    IMPORTANT — these are WEEKS, not sessions. Speediance only serves this movement's history bucketed
+    by week: each entry covers a Sunday-to-Saturday week (`weekStarting`), so `volume` is that WHOLE
+    week's volume and may combine several sessions. `topWeight` is a real heaviest set and is safe to
+    compare. Never describe an entry as a session or a day, never say a movement was done ON
+    weekStarting, and never read `volume` as one workout's volume. For what was done in a single
+    session, use get_session_detail; for how a movement is trending over months, use this."""
     try:
         item = resolve_group(app, exercise, groupId)
     except AmbiguousExercise as exc:
         return {"needsPick": True, "matches": exc.matches}
-    rows = sorted(app.api.exercise_stats(item["groupId"], max_days=max(1, min(int(limit), MAX_HISTORY))),
+    rows = sorted(app.api.exercise_stats(item["groupId"], max_weeks=max(1, min(int(limit), MAX_HISTORY))),
                   key=lambda r: str(r.get("dayStr", "")))
-    sessions = []
+    weeks = []
     for row in rows:
-        entry = {"date": row.get("dayStr"), "topWeight": row.get("maxWeight"), "volume": row.get("totalCapacity")}
+        entry = {"weekStarting": row.get("dayStr"), "topWeight": row.get("maxWeight"),
+                 "weekVolume": row.get("totalCapacity")}
         if row.get("minWeight") not in (None, row.get("maxWeight")):
             entry["minWeight"] = row.get("minWeight")
-        sessions.append(entry)
+        weeks.append(entry)
     head = {"exercise": {"groupId": item["groupId"], "name": item["name"],
                          "muscle": (item["muscles"] or [None])[0], "equipment": item["equipment"],
                          "kind": item["kind"]},
-            "displayUnit": app.api.unit, "source": "userActionStatPage"}
-    if not sessions:
-        return {**head, "sessions": [], "summary": {"sessions": 0}, "note": "No logged history for this movement yet."}
-    best = max(sessions, key=lambda s: s["topWeight"] or 0)
-    best_volume = max(sessions, key=lambda s: s["volume"] or 0)
-    return {**head, "sessions": sessions,
-            "summary": {"sessions": len(sessions), "firstSeen": sessions[0]["date"], "lastSeen": sessions[-1]["date"],
-                        "latestTopWeight": sessions[-1]["topWeight"],
-                        "bestWeight": {"value": best["topWeight"], "date": best["date"]},
-                        "bestVolume": {"value": best_volume["volume"], "date": best_volume["date"]}},
-            "note": "One entry per training day; several sessions on the same day are combined."}
+            "displayUnit": app.api.unit, "source": "userActionStatPage", "granularity": "week"}
+    if not weeks:
+        return {**head, "weeks": [], "summary": {"weeks": 0}, "note": "No logged history for this movement yet."}
+    best = max(weeks, key=lambda w: w["topWeight"] or 0)
+    best_volume = max(weeks, key=lambda w: w["weekVolume"] or 0)
+    return {**head, "weeks": weeks,
+            "summary": {"weeks": len(weeks), "firstSeen": weeks[0]["weekStarting"],
+                        "lastSeen": weeks[-1]["weekStarting"],
+                        "latestTopWeight": weeks[-1]["topWeight"],
+                        "bestWeight": {"value": best["topWeight"], "weekStarting": best["weekStarting"]},
+                        "bestWeekVolume": {"value": best_volume["weekVolume"],
+                                           "weekStarting": best_volume["weekStarting"]}},
+            "note": ("One entry per WEEK (Sunday-to-Saturday, labelled with that week's Monday), not per "
+                     "session — Speediance serves no finer granularity for a movement. weekVolume may "
+                     "combine several sessions; topWeight is a genuine heaviest set.")}

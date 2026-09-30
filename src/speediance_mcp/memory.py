@@ -31,6 +31,77 @@ CREATE TABLE IF NOT EXISTS exercise_marks (
   updated_at TEXT NOT NULL,
   reason TEXT NOT NULL DEFAULT ''
 );
+-- Cached per-session exercise stats. A DERIVED cache, not a source of truth: every row is
+-- recomputable from Speediance, which is what makes it safe to rebuild. (Contrast
+-- offmachine_sets below, which holds the ONLY copy of its data.)
+--
+-- It exists because userActionStatPage buckets by WEEK, so it cannot say what a single
+-- day held; session detail is the only daily source, and deriving it on every read was
+-- slow and bounded personal bests to a short window. `derived_version` is stamped on every
+-- row so that correcting the volume/max-weight derivation invalidates what the old logic
+-- produced instead of preserving it silently.
+--
+-- SHARED TABLES: the companion web app's session_stats_store.py declares these identically
+-- in this same file. Whichever process opens first creates them — change both together.
+CREATE TABLE IF NOT EXISTS session_exercise_stats (
+  training_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  group_id INTEGER,
+  day TEXT NOT NULL,
+  volume REAL NOT NULL DEFAULT 0,
+  max_weight REAL NOT NULL DEFAULT 0,
+  sets INTEGER NOT NULL DEFAULT 0,
+  reps INTEGER NOT NULL DEFAULT 0,
+  derived_version INTEGER NOT NULL,
+  cached_at TEXT NOT NULL,
+  PRIMARY KEY (training_id, name)
+);
+CREATE INDEX IF NOT EXISTS session_exercise_stats_day ON session_exercise_stats (day);
+-- Every scanned session is recorded here, INCLUDING ones that parsed to no exercises
+-- (cardio, rowing, an unreadable payload). Without that marker an empty session would be
+-- re-fetched on every reconcile forever.
+CREATE TABLE IF NOT EXISTS session_stats_scanned (
+  training_id INTEGER PRIMARY KEY,
+  day TEXT NOT NULL,
+  session_type INTEGER,
+  exercise_count INTEGER NOT NULL DEFAULT 0,
+  unreadable TEXT NOT NULL DEFAULT '',
+  derived_version INTEGER NOT NULL,
+  cached_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS session_stats_scanned_day ON session_stats_scanned (day);
+-- Off-machine training: the exercise detail Speediance cannot hold.
+--
+-- Speediance's manual log (session type 10) counts a day towards streaks, days trained,
+-- minutes and calories, but stores NO exercises — and the detail cannot be pushed in:
+-- app/freetraining/save is an UPDATE into a session row the machine itself created
+-- (getFreeTrainingId for a client-invented uuid returns null), so a workout that never
+-- ran on the hardware cannot be written at all. The detail therefore lives here.
+--
+-- SHARED TABLE: the companion web app's offmachine_store.py declares this same table in
+-- this same file. Whichever process opens first creates it, so the two definitions must
+-- stay identical — change both together.
+--
+-- One row per SET. group_id is the Speediance exercise GROUP id, which is what lets a
+-- hotel set resolve through the library to muscles and count towards volume; NULL means
+-- the movement has no Speediance equivalent (still logged, just not attributable).
+-- Weights are in the account's DISPLAY unit, matching Speediance's own no-conversion
+-- convention on read and write alike.
+CREATE TABLE IF NOT EXISTS offmachine_sets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  day TEXT NOT NULL,
+  training_id INTEGER,
+  group_id INTEGER,
+  name TEXT NOT NULL,
+  set_index INTEGER NOT NULL,
+  reps INTEGER NOT NULL,
+  weight REAL NOT NULL DEFAULT 0,
+  side TEXT NOT NULL DEFAULT 'both' CHECK (side IN ('both', 'left', 'right')),
+  location TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS offmachine_sets_day ON offmachine_sets (day);
 CREATE TABLE IF NOT EXISTS curated_facts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   text TEXT NOT NULL,
@@ -105,6 +176,13 @@ class Memory:
             columns = {row["name"] for row in self._db.execute("PRAGMA table_info(exercise_marks)")}
             if "reason" not in columns:
                 self._db.execute("ALTER TABLE exercise_marks ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
+            # CREATE TABLE IF NOT EXISTS does nothing to a table that already exists, so a
+            # column added after first ship needs an explicit migration on both sides of
+            # the shared file — the web app's session_stats_store.py carries the twin.
+            scanned = {row["name"] for row in self._db.execute("PRAGMA table_info(session_stats_scanned)")}
+            if scanned and "unreadable" not in scanned:
+                self._db.execute("ALTER TABLE session_stats_scanned "
+                                 "ADD COLUMN unreadable TEXT NOT NULL DEFAULT ''")
             self._db.execute(MIGRATE_LEGACY)
 
     def migrate_legacy(self) -> None:
@@ -338,6 +416,137 @@ class Memory:
         with self._lock:
             rows = self._db.execute("SELECT group_id, mark, name, reason FROM exercise_marks").fetchall()
         return {r["group_id"]: {"mark": r["mark"], "name": r["name"], "reason": r["reason"]} for r in rows}
+
+    # --- off-machine training ---------------------------------------------------------------------
+    def log_offmachine_sets(self, day: str, sets: list[dict], *, training_id: int | None = None,
+                            location: str = "") -> list[dict]:
+        """Record the sets of one off-machine session; returns that day's stored rows.
+
+        Every set is validated BEFORE anything is written, inside one transaction, so a
+        batch with one bad entry stores nothing. A half-logged session is worse than an
+        unlogged one: it silently understates volume and can fake a personal best.
+        """
+        day = _offmachine_day(day)
+        if not sets:
+            raise ValueError("no sets given")
+        location = (location or "").strip()[:OFFMACHINE_MAX_LOCATION]
+        linked = int(training_id) if training_id not in (None, "") else None
+        prepared, counters = [], {}
+        for entry in sets:
+            entry = entry or {}
+            name = str(entry.get("name") or "").strip()[:OFFMACHINE_MAX_NAME]
+            if not name:
+                raise ValueError("every set needs an exercise name")
+            group_id = entry.get("groupId")
+            group_id = int(group_id) if group_id not in (None, "") else None
+            # Set numbers run per movement, so "set 2" is the second set of THAT exercise.
+            key = (group_id, name.lower())
+            counters[key] = counters.get(key, 0) + 1
+            prepared.append((day, linked, group_id, name, counters[key],
+                             _offmachine_reps(entry.get("reps")),
+                             _offmachine_weight(entry.get("weight")),
+                             _offmachine_side(entry.get("side")), location,
+                             str(entry.get("note") or "").strip()[:OFFMACHINE_MAX_NOTE],
+                             _iso(self._now())))
+        with self._transaction() as db:
+            db.executemany(
+                "INSERT INTO offmachine_sets (day, training_id, group_id, name, set_index, reps, "
+                "weight, side, location, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                prepared)
+        return self.offmachine_sets(day, day)
+
+    def offmachine_sets(self, start: str, end: str) -> list[dict]:
+        """Every off-machine set between two dates, inclusive, oldest first."""
+        start, end = _offmachine_day(start), _offmachine_day(end)
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM offmachine_sets WHERE day >= ? AND day <= ? "
+                "ORDER BY day, name, set_index, id", (start, end)).fetchall()
+        return [_offmachine_row(r) for r in rows]
+
+    def offmachine_for_session(self, training_id: int | None = None,
+                               day: str | None = None) -> list[dict]:
+        """Sets belonging to one Speediance manual session, by link then by date.
+
+        A set may predate the Speediance manual record it belongs to, so the day is a
+        fallback. An explicit training_id match wins, so linked sets are never mixed with
+        unrelated work that merely shares the date.
+        """
+        with self._lock:
+            if training_id not in (None, ""):
+                rows = self._db.execute(
+                    "SELECT * FROM offmachine_sets WHERE training_id = ? ORDER BY name, set_index, id",
+                    (int(training_id),)).fetchall()
+                if rows:
+                    return [_offmachine_row(r) for r in rows]
+            if day in (None, ""):
+                return []
+            rows = self._db.execute(
+                "SELECT * FROM offmachine_sets WHERE day = ? ORDER BY name, set_index, id",
+                (_offmachine_day(day),)).fetchall()
+        return [_offmachine_row(r) for r in rows]
+
+    def delete_offmachine_day(self, day: str) -> int:
+        """Remove every set logged for one day; returns how many rows went."""
+        day = _offmachine_day(day)
+        with self._transaction() as db:
+            return db.execute("DELETE FROM offmachine_sets WHERE day = ?", (day,)).rowcount
+
+
+# --- off-machine helpers ----------------------------------------------------------------------
+OFFMACHINE_MAX_NAME = 120
+OFFMACHINE_MAX_NOTE = 300
+OFFMACHINE_MAX_LOCATION = 60
+OFFMACHINE_SIDES = ("both", "left", "right")
+# The machine's own leftRight vocabulary, so an adapted set can be handed to code that
+# already knows how to read one: 1 = left only, 2 = right only, 0 = both together.
+OFFMACHINE_SIDE_CODES = {"left": 1, "right": 2, "both": 0}
+
+
+def _offmachine_day(value) -> str:
+    """A YYYY-MM-DD string, or ValueError. Accepts a date/datetime or an ISO string."""
+    if isinstance(value, (dt.date, dt.datetime)):
+        return value.strftime("%Y-%m-%d")
+    text = str(value or "").strip()[:10]
+    dt.date.fromisoformat(text)  # raises ValueError on anything malformed
+    return text
+
+
+def _offmachine_reps(value) -> int:
+    try:
+        reps = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"reps must be a whole number, got {value!r}")
+    if reps <= 0:
+        raise ValueError(f"reps must be greater than zero, got {reps}")
+    return reps
+
+
+def _offmachine_weight(value) -> float:
+    """Load for one set. Zero is legitimate — a bodyweight movement is not an error."""
+    if value in (None, ""):
+        return 0.0
+    try:
+        weight = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"weight must be a number, got {value!r}")
+    if weight < 0:
+        raise ValueError(f"weight cannot be negative, got {weight}")
+    return round(weight, 2)
+
+
+def _offmachine_side(value) -> str:
+    side = str(value or "both").strip().lower()
+    if side not in OFFMACHINE_SIDES:
+        raise ValueError(f"side must be one of {OFFMACHINE_SIDES}, got {value!r}")
+    return side
+
+
+def _offmachine_row(row) -> dict:
+    return {"id": row["id"], "day": row["day"], "trainingId": row["training_id"],
+            "groupId": row["group_id"], "name": row["name"], "setIndex": row["set_index"],
+            "reps": row["reps"], "weight": row["weight"], "side": row["side"],
+            "location": row["location"], "note": row["note"]}
 
 
 def _validate(key: str, value):

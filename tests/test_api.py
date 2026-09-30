@@ -86,9 +86,9 @@ class TestAPI(unittest.TestCase):
     def test_exercise_stats_pages_until_short_page(self):
         rows = [{"dayStr": f"2026-01-{d:02d}", "maxWeight": 10.0} for d in range(1, 29)] * 2  # 56 rows
         api, fake, _ = self.make({("GET", fx.STATS_PATH): fx.stats_route({321: rows})})
-        self.assertEqual(len(api.exercise_stats(321, max_days=100)), 56)
+        self.assertEqual(len(api.exercise_stats(321, max_weeks=100)), 56)
         self.assertEqual(len(fake.calls("GET", fx.STATS_PATH)), 2)
-        self.assertEqual(len(api.exercise_stats(321, max_days=10)), 10)
+        self.assertEqual(len(api.exercise_stats(321, max_weeks=10)), 10)
 
     def test_library_fetches_once_then_uses_disk_cache(self):
         api, fake, home = self.make(clock=lambda: 5000.0)

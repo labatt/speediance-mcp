@@ -121,17 +121,20 @@ class SpeedianceAPI:
         return self.client.get("/api/app/v5/trainingCalendar/monthNew",
                                params={"date": month, "selectedDeviceType": self.device_type}) or []
 
-    def exercise_stats(self, group_id, max_days: int = 50) -> list[dict]:
+    def exercise_stats(self, group_id, max_weeks: int = 50) -> list[dict]:
+        """Per-movement stat rows. NOTE: each row is a WEEK, not a day or a session —
+        `dayStr` is always the Monday of a Sunday-to-Saturday week, so its totalCapacity
+        is that week's volume. Verified live 2026-09-29. There is no daily variant."""
         out: list[dict] = []
         page = 1
-        while len(out) < max_days:
+        while len(out) < max_weeks:
             rows = self.client.get("/api/app/actionLibraryGroup/userActionStatPage",
                                    params={"id": int(group_id), "pageNo": page, "pageSize": STATS_PAGE}) or []
             out.extend(r for r in rows if isinstance(r, dict))
             if len(rows) < STATS_PAGE:
                 break
             page += 1
-        return out[:max_days]
+        return out[:max_weeks]
 
     # --- templates and calendar ----------------------------------------------
     def templates(self) -> list[dict]:

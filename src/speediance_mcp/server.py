@@ -10,7 +10,8 @@ import typing
 from mcp.server.mcpserver import MCPServer
 
 from . import __version__
-from .tools import account, calendar, coaching, exercises, memory_tools, sessions, workouts
+from .tools import (account, calendar, coaching, exercises, memory_tools, offmachine, sessions,
+                    workouts)
 from .tools.errors import translate
 
 INSTRUCTIONS = """\
@@ -54,6 +55,18 @@ EXERCISE MARKS — ★preferred and ⊘avoided movements:
 TEMPLATES — accounts hold a limited number of custom workouts. Prefer update_workout over creating new
 ones, and never delete a template to make room without asking. After create/update, check `verified`.
 
+OFF-MACHINE TRAINING — work done away from the Gym Monster (hotel gyms, free weights, travel):
+- When the user describes training that did NOT happen on the machine, record it with
+  log_off_machine_workout. Speediance's own manual entry (which they add in the app) already makes the
+  day count towards their streak, days trained, minutes and calories, but it stores NO exercises and
+  none can be written to it — so this tool is the only way that work reaches volume by muscle and
+  personal bests. Backdating is fine, so a whole trip can be caught up in one call.
+- get_session_detail on a manual session returns those exercises, and exerciseSource says whether they
+  came from this log. When it says "none", offer to record what they did.
+- get_muscle_balance already includes them, and reports offMachineDays/offMachineSets separately: they
+  are real training, but not sessions the machine recorded. Never describe them as machine work.
+- delete_off_machine_day only touches our log, never Speediance. Ask the user before calling it.
+
 UNITS — every weight is already in the account's displayUnit. Never convert.
 """
 
@@ -69,6 +82,8 @@ TOOLS = (
     calendar.schedule_workout, calendar.unschedule_workout, calendar.browse_programs,
     memory_tools.get_preferences, memory_tools.set_preferences, memory_tools.remember_fact, memory_tools.forget_fact,
     memory_tools.list_facts, memory_tools.import_facts,
+    offmachine.log_off_machine_workout, offmachine.get_off_machine_log,
+    offmachine.delete_off_machine_day,
 )
 
 

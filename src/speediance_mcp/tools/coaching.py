@@ -4,6 +4,7 @@ import datetime as dt
 
 from mcp.server.mcpserver.exceptions import ToolError
 
+from ..speediance import offmachine as offmachine_adapt
 from ..speediance.muscles import attribute, muscle_index, ratios, untrained
 from ..speediance.parsing import epley, round_half
 from ._common import is_health_import, other_activity, record_summary, resolve_group, session_exercises
@@ -165,16 +166,35 @@ def compare_sessions(app, training_id: int, previous_training_id: int = 0) -> di
 
 
 def _latest_top_set(app, group_id: int) -> dict | None:
-    days = sorted(app.api.exercise_stats(group_id, max_days=10), key=lambda r: str(r.get("dayStr", "")), reverse=True)
+    """The most recent real top set for a movement, read from session detail.
+
+    The stat rows are used only to bound the search: each one is a WEEK (dayStr is always
+    that week's Monday), so it says the movement was trained somewhere in that week, not
+    on that date. Matching a record's date against dayStr therefore found a session only
+    when it happened to fall on the Monday and missed every other day — which sent
+    suggest_load to its fallback anchor for no reason. So each bucket is expanded to the
+    Sunday-to-Saturday week it actually covers, and the real session supplies the numbers.
+    """
+    weeks = sorted(app.api.exercise_stats(group_id, max_weeks=10),
+                   key=lambda r: str(r.get("dayStr", "")), reverse=True)
     index = app.api.history_index()
-    for day in days:
-        if not day.get("maxWeight"):
+    for week in weeks:
+        if not week.get("maxWeight"):
             continue
-        for record in (r for r in index.values() if str(r.get("startTime", ""))[:10] == day.get("dayStr")):
+        try:
+            monday = dt.date.fromisoformat(str(week.get("dayStr"))[:10])
+        except (TypeError, ValueError):
+            continue
+        # Speediance's stat week runs Sunday-to-Saturday but is keyed to its Monday.
+        start, end = monday - dt.timedelta(days=1), monday + dt.timedelta(days=5)
+        in_week = [r for r in index.values()
+                   if start.isoformat() <= str(r.get("startTime", ""))[:10] <= end.isoformat()]
+        for record in sorted(in_week, key=lambda r: str(r.get("startTime", "")), reverse=True):
             for exercise in _exercises(app, record):
                 best = _best_set(exercise) if exercise["groupId"] == group_id else None
                 if best:
-                    return {"date": day["dayStr"], "weight": best["weight"], "reps": best["reps"],
+                    return {"date": str(record.get("startTime", ""))[:10],
+                            "weight": best["weight"], "reps": best["reps"],
                             "trainingId": int(record["trainingId"])}
     return None
 
@@ -229,12 +249,25 @@ def get_muscle_balance(app, days: int = 30) -> dict:
     exercises: list[dict] = []
     for record in records:
         exercises.extend(_exercises(app, record))
+    # Off-machine sets are adapted into the same parsed shape, so they go through the same
+    # attribution pass: a hotel dumbbell press loads chest exactly like a machine set.
+    # Speediance holds no exercise detail for those days, so our own log is the only source.
+    # app.api.today(), not dt.date.today(): the whole codebase takes "now" from the app's
+    # clock, which the tests pin and which follows the account rather than this server.
+    today = app.api.today()
+    off_sets = app.memory.offmachine_sets((today - dt.timedelta(days=days - 1)).isoformat(),
+                                          today.isoformat())
+    exercises.extend(offmachine_adapt.as_exercises(off_sets))
     spread = attribute(exercises, index)
     by_muscle = spread["byMuscle"]
     ranked = sorted(by_muscle.items(), key=lambda kv: kv[1], reverse=True)
     return {
         "windowDays": days,
         "sessions": len(records),
+        # Counted separately from machine sessions: real training, but not sessions the
+        # machine recorded.
+        "offMachineDays": len({r["day"] for r in off_sets}),
+        "offMachineSets": len(off_sets),
         "displayUnit": app.api.unit,
         "attribution": "main muscle 100%, assisting muscle 50%",
         "byMuscle": [{"muscle": m, "volume": v} for m, v in ranked],

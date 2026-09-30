@@ -10,6 +10,13 @@ from __future__ import annotations
 FREE_ROUTE = "freeTraining"
 FREE_INTERVALS_ROUTE = "freeTrainingDetail"
 
+# Type 10 is a workout logged off the machine through the app's own manual entry.
+# Verified live 2026-09-29: the record carries title, sport type, duration, calories,
+# heart rate and distance, and NO exercises — Speediance's manual record has no field for
+# them. It is a real session (not a phone-health import), so it counts towards days
+# trained and streaks, but contributes no volume and can set no personal best.
+MANUAL_TYPE = 10
+
 DETAIL_ROUTES = {
     1: FREE_ROUTE, 6: FREE_ROUTE, 7: FREE_ROUTE,          # Free Lift, guided/quick cardio
     2: "courseTrainingInfoDetail",                        # course / program

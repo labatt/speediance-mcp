@@ -243,7 +243,7 @@ data dir; `create_workout` and `update_workout` flag any avoided exercise they w
 | `get_exercise` | One movement's muscles, equipment, form cues and media |
 | `mark_exercise` | Mark a movement ★ preferred or ⊘ avoided |
 | `list_accessories` | Speediance's accessories, flagged with what you own |
-| `get_exercise_history` | Every session of one movement, oldest to newest |
+| `get_exercise_history` | One movement's week-by-week trend, oldest to newest (Speediance buckets this by week, not by session) |
 | `list_my_workouts` | Your saved custom workouts |
 | `get_workout` | One workout's full prescription |
 | `create_workout` | Create a workout (verified by reading it back) |
@@ -258,15 +258,19 @@ data dir; `create_workout` and `update_workout` flag any avoided exercise they w
 | `forget_fact` | Archive a fact that no longer applies (kept in the history) |
 | `list_facts` | Audit the facts, optionally with the full history of superseded, forgotten and expired ones |
 | `import_facts` | Save many facts at once under the same rules, with a `dry_run` report first |
+| `log_off_machine_workout` | Record a workout done away from the machine (hotel gym, free weights) so it counts towards volume and personal bests |
+| `get_off_machine_log` | Off-machine workouts logged between two dates |
+| `delete_off_machine_day` | Remove one day from the off-machine log (never touches Speediance) |
 
 19 of these use GM Manager's tool names and, for most, its parameter names (`template_id`, `groupId`,
 `add`...), so prompts written for GM Manager keep working: `check_connection`, `get_calendar`,
 `get_session_detail`, `get_exercise_history`, `get_athlete_snapshot`, `get_strength_profile`, `list_exercises`,
 `mark_exercise`, `list_my_workouts`, `get_workout`, `create_workout`, `update_workout`, `delete_workout`,
 `schedule_workout`, `suggest_load`, `get_preferences`, `set_preferences`, `remember_fact` and `forget_fact`.
-The other 10 are new: `get_heart_rate`, `get_training_stats`, `compare_sessions`, `get_exercise`,
-`list_accessories`, `unschedule_workout`, `browse_programs`, `list_facts`, `import_facts` and
-`get_muscle_balance`. `set_preferences`,
+The other 13 are new: `get_heart_rate`, `get_training_stats`, `compare_sessions`, `get_exercise`,
+`list_accessories`, `unschedule_workout`, `browse_programs`, `list_facts`, `import_facts`,
+`get_muscle_balance`, `log_off_machine_workout`, `get_off_machine_log` and `delete_off_machine_day`.
+`set_preferences`,
 `suggest_load` and `create_workout` take simpler inputs: typed preference fields instead of one JSON blob, and
 no Dynamic Weight modes or RM presets yet. `remember_fact` and `forget_fact` differ from GM Manager's (see
 below).
