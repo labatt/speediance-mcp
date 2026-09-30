@@ -357,7 +357,9 @@ Encoded in `speediance.writes`:
 3. *(merged into rule 2)*
 4. A unilateral movement (`isLeftRight`) with no explicit sides gets sides auto-alternated
    `1,2,1,2,…`. All-`0` sides → HTTP 500.
-5. `counterweight2` is always sent empty (a non-empty value clobbers weights server-side).
+5. `counterweight2` is sent empty on any movement we build or change (a non-empty value clobbers weights
+   server-side). An update carries a stored one, with its positive `templatePresetId`, back unchanged on
+   movements whose prescription it leaves alone, so editing one set doesn't strip it from the rest.
 6. **Verify by read-back.** After a create/update, fetch the template and compare stored
    weights and reps with what was sent. On a mismatch, return `verified:false` and the diff
    rather than claiming success. Rules 2 and 3 are unverified on lb accounts; this check makes
