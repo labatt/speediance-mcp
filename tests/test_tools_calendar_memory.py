@@ -36,6 +36,67 @@ class TestCalendarTools(unittest.TestCase):
         detail = calendar.browse_programs(app, program_id=77)
         self.assertEqual(detail["program"]["name"], "Strength Foundations")
         self.assertEqual(detail["structure"]["weekList"], ["Week 1", "Week 2"])
+        day1, day2 = detail["schedule"][0]["days"]
+        self.assertEqual(day1["courses"][0]["courseCode"], "c" * 24)
+        self.assertEqual(day2["courses"], [])
+
+    def test_programs_query_also_lists_courses(self):
+        app, _ = make_app(self)
+        self.assertNotIn("courses", calendar.browse_programs(app))
+        got = calendar.browse_programs(app, query="strength")
+        self.assertEqual([c["courseCode"] for c in got["courses"]], ["c" * 24])  # by category
+        got = calendar.browse_programs(app, query="engine")
+        self.assertEqual((got["count"], got["courses"][0]["title"]), (0, "Base & Engine #1"))  # by title
+
+
+class TestCourseScheduling(unittest.TestCase):
+    def make(self, **kw):
+        return make_app(self, fx.course_booking_routes(fx.standard_routes(), **kw))
+
+    def bodies(self, fake):
+        return [json.loads(r.content) for r in fake.calls("POST", fx.COURSE_RESERVE_PATH)]
+
+    def test_book_then_unbook(self):
+        app, fake = self.make()
+        got = calendar.schedule_workout(app, "2026-10-14", course_code="c" * 24)
+        self.assertEqual(got, {"scheduled": True, "date": "2026-10-14", "courseCode": "c" * 24,
+                               "name": "All Around the Chest", "verified": True})
+        got = calendar.unschedule_workout(app, "2026-10-14", course_code="c" * 24)
+        self.assertEqual((got["unscheduled"], got["verified"]), (True, True))
+        self.assertEqual([(b["status"], b["thatDay"], b["courseCode"]) for b in self.bodies(fake)],
+                         [(1, "2026-10-14", "c" * 24), (0, "2026-10-14", "c" * 24)])
+        self.assertEqual(fake.calls("POST", fx.RESERVE_PATH), [])
+
+    def test_add_false_and_course_id_resolve_to_the_code(self):
+        app, fake = self.make()
+        calendar.schedule_workout(app, "2026-10-14", course_code="2577")
+        self.assertTrue(calendar.schedule_workout(app, "2026-10-14", course_code="c" * 24, add=False)["unscheduled"])
+        self.assertEqual([b["courseCode"] for b in self.bodies(fake)], ["c" * 24, "c" * 24])
+
+    def test_unverified_booking_is_reported(self):
+        app, _ = self.make(sticks=False)
+        self.assertFalse(calendar.schedule_workout(app, "2026-10-14", course_code="c" * 24)["verified"])
+
+    def test_rejected_booking_is_an_error(self):
+        app, _ = self.make(accept=False)
+        with self.assertRaises(ToolError):
+            calendar.schedule_workout(app, "2026-10-14", course_code="c" * 24)
+
+    def test_validation_writes_nothing(self):
+        app, fake = self.make()
+        for kwargs in ({}, {"code": "a" * 24, "course_code": "c" * 24}, {"code": " ", "course_code": ""}):
+            with self.assertRaises(ToolError):
+                calendar.schedule_workout(app, "2026-10-14", **kwargs)
+            with self.assertRaises(ToolError):
+                calendar.unschedule_workout(app, "2026-10-14", **kwargs)
+        with self.assertRaises(ToolError):
+            calendar.schedule_workout(app, "2026-10-14", course_code="unknown")
+        with self.assertRaises(ToolError):
+            calendar.schedule_workout(app, "2026-02-30", course_code="c" * 24)
+        with self.assertRaises(ToolError):  # nothing booked that day
+            calendar.unschedule_workout(app, "2026-10-14", course_code="c" * 24)
+        self.assertEqual(self.bodies(fake), [])
+        self.assertEqual(fake.calls("POST", fx.RESERVE_PATH), [])
 
 
 class TestMemoryTools(unittest.TestCase):
