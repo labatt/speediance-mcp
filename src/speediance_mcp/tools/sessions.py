@@ -16,11 +16,30 @@ ROWING_GAP_NOTE = ("No per-interval detail for this session: it has no rowing te
 HR_POINTS = 600
 
 
+def open_with(entry: dict) -> dict | None:
+    """Which tool opens a calendar entry, and with what arguments. None if nothing can.
+
+    It dispatches on what identifies the entry, not on one field being present. Every course
+    and AI entry carries a `code` too, but that code isn't a template's: detailByCode answers
+    code 100041 for it (verified live 2026-09-30). So `courseId` marks a course, and
+    `templateId` + `code` mark a template.
+    """
+    if entry.get("isFinish") == 1 and entry.get("trainingId"):
+        return {"tool": "get_session_detail", "training_id": entry["trainingId"]}
+    if entry.get("courseId"):
+        return {"tool": "get_planned_session", "course_id": entry["courseId"], "type": entry.get("type") or 0}
+    if entry.get("templateId") and entry.get("code"):
+        return {"tool": "get_workout", "code": entry["code"]}
+    return None
+
+
 def get_calendar(app, month: str) -> dict:
     """What's scheduled and trained in a month (`month` = 'YYYY-MM'). Each day carries its
     trainingPlanList. The raw calendar feed hides completed custom-template sessions, so completed
-    sessions from the history feed are merged in with source:"history"; pass their trainingId to
-    get_session_detail. Reservations (isReservation:true) are scheduled templates. Activity imported
+    sessions from the history feed are merged in with source:"history". Every entry that can be
+    opened says how in openWith: get_session_detail for a completed session, get_workout for a
+    booked template, get_planned_session for a booked official course or AI session (these carry
+    a courseId; their `code` is not a template code). Activity imported
     from the user's phone health app (walks, rides, other off-machine work that reached Speediance)
     is listed per day under otherActivities — count it in weekly load, but it isn't a gym session.
     Speediance only holds what the phone synced; other sources (e.g. a wellness app) may have more."""
@@ -42,6 +61,11 @@ def get_calendar(app, month: str) -> dict:
                       "title": record.get("title"), "isFinish": 1, "source": "history",
                       "trainingTime": record.get("trainingTime"), "totalCapacity": record.get("totalCapacity"),
                       "calorie": record.get("calorie")})
+    for day in by_date.values():
+        for entry in day.get("trainingPlanList") or []:
+            target = open_with(entry)
+            if target:
+                entry["openWith"] = target
     return {"month": month, "displayUnit": app.api.unit, "days": [by_date[k] for k in sorted(by_date) if k]}
 
 

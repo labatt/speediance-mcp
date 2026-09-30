@@ -315,6 +315,7 @@ data dir; `create_workout` and `update_workout` flag any avoided exercise they w
 | `get_exercise_history` | One movement's week-by-week trend, oldest to newest (Speediance buckets this by week, not by session) |
 | `list_my_workouts` | Your saved custom workouts |
 | `get_workout` | One workout's full prescription |
+| `get_planned_session` | What a booked official course or AI session will ask for, before it's done |
 | `create_workout` | Create a workout (verified by reading it back) |
 | `update_workout` | Edit a workout in place |
 | `delete_workout` | Delete a workout |
@@ -336,9 +337,10 @@ data dir; `create_workout` and `update_workout` flag any avoided exercise they w
 `get_session_detail`, `get_exercise_history`, `get_athlete_snapshot`, `get_strength_profile`, `list_exercises`,
 `mark_exercise`, `list_my_workouts`, `get_workout`, `create_workout`, `update_workout`, `delete_workout`,
 `schedule_workout`, `suggest_load`, `get_preferences`, `set_preferences`, `remember_fact` and `forget_fact`.
-The other 13 are new: `get_heart_rate`, `get_training_stats`, `compare_sessions`, `get_exercise`,
+The other 14 are new: `get_heart_rate`, `get_training_stats`, `compare_sessions`, `get_exercise`,
 `list_accessories`, `unschedule_workout`, `browse_programs`, `list_facts`, `import_facts`,
-`get_muscle_balance`, `log_off_machine_workout`, `get_off_machine_log` and `delete_off_machine_day`.
+`get_muscle_balance`, `log_off_machine_workout`, `get_off_machine_log`, `delete_off_machine_day` and
+`get_planned_session`.
 `set_preferences`,
 `suggest_load` and `create_workout` take simpler inputs: typed preference fields instead of one JSON blob, and
 no Dynamic Weight modes or RM presets yet. `remember_fact` and `forget_fact` differ from GM Manager's (see
