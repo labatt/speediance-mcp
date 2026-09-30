@@ -79,6 +79,21 @@ real training:
   Speediance doesn't stock is still logged and reported as unmatched rather than refused.
 - Single-arm sets keep their side and aren't counted as both; bodyweight work is recorded, not rejected.
 
+## Recovery and health
+
+> *"Am I recovered enough for legs today?"*
+
+`get_recovery` reads what the Speediance app's Health tab shows: its physical-condition model (fitness,
+fatigue and their ratio, the acute:chronic workload ratio), last night's sleep with deep/core/REM/awake
+against the app's healthy ranges, the Wellness Monitor (HRV, resting heart rate, blood oxygen, respiratory
+rate and skin temperature, each against **your own** baseline band), and how fatigued each muscle is from
+recent training. `get_athlete_snapshot` carries the same readout, so planning sees it without an extra call,
+and `get_readiness_trend` gives the day-by-day view.
+
+Most of this is your phone's health data (Apple Health or Health Connect) relayed through Speediance, so it
+needs a watch or ring syncing sleep and HRV to the phone, and health sharing turned on in the Speediance app.
+Without one, those sections come back empty and `feeds` says so.
+
 ## Install
 
 You need **Python 3.10 or newer**. Check with `python3 --version` (Windows: `py --version`).
@@ -303,9 +318,12 @@ data dir; `create_workout` and `update_workout` flag any avoided exercise they w
 | `get_session_detail` | One session's per-exercise log — sets, reps, weights; rowing pace/power; guided-cardio intervals |
 | `get_heart_rate` | A watch-paired session's heart-rate curve and summary |
 | `get_training_stats` | Totals between two dates |
-| `get_athlete_snapshot` | Profile, coaching memory and recent sessions in one call |
+| `get_athlete_snapshot` | Profile, coaching memory, recent sessions and today's recovery in one call |
 | `get_strength_profile` | Estimated 1RM per recently trained movement |
 | `get_muscle_balance` | Which muscles the recent work loaded, push:pull and upper:lower, and what's been missed |
+| `get_recovery` | Today's readiness: training status and load ratio, last night's sleep and stages, HRV / resting HR / SpO2 / respiratory rate / skin temperature against your own baseline, and per-muscle fatigue |
+| `get_readiness_trend` | Training status and sleep day by day, up to 14 days |
+| `get_body_metrics` | Latest weight, body fat, BMI, lean mass and FFMI, plus cardio fitness, strength score and body age |
 | `compare_sessions` | A session versus the previous one, per movement |
 | `suggest_load` | A working weight for a rep target, with its reasoning |
 | `list_exercises` | Search the exercise library (body part, equipment, what you own) |
@@ -336,9 +354,10 @@ data dir; `create_workout` and `update_workout` flag any avoided exercise they w
 `get_session_detail`, `get_exercise_history`, `get_athlete_snapshot`, `get_strength_profile`, `list_exercises`,
 `mark_exercise`, `list_my_workouts`, `get_workout`, `create_workout`, `update_workout`, `delete_workout`,
 `schedule_workout`, `suggest_load`, `get_preferences`, `set_preferences`, `remember_fact` and `forget_fact`.
-The other 13 are new: `get_heart_rate`, `get_training_stats`, `compare_sessions`, `get_exercise`,
+The other 16 are new: `get_heart_rate`, `get_training_stats`, `compare_sessions`, `get_exercise`,
 `list_accessories`, `unschedule_workout`, `browse_programs`, `list_facts`, `import_facts`,
-`get_muscle_balance`, `log_off_machine_workout`, `get_off_machine_log` and `delete_off_machine_day`.
+`get_muscle_balance`, `log_off_machine_workout`, `get_off_machine_log`, `delete_off_machine_day`,
+`get_recovery`, `get_readiness_trend` and `get_body_metrics`.
 `set_preferences`,
 `suggest_load` and `create_workout` take simpler inputs: typed preference fields instead of one JSON blob, and
 no Dynamic Weight modes or RM presets yet. `remember_fact` and `forget_fact` differ from GM Manager's (see
