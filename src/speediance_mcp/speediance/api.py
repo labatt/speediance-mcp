@@ -136,6 +136,45 @@ class SpeedianceAPI:
             page += 1
         return out[:max_weeks]
 
+    # --- recovery and health ---------------------------------------------------
+    # Read-only routes behind the app's Health tab, verified live 2026-09-30. Day-scoped routes
+    # take `dateStr` (YYYY-MM-DD): `date`, `day` and a timestamp all answer code 10. Most of this
+    # is the phone's health data (Apple Health / Health Connect) relayed through Speediance, so it
+    # is empty without a paired wearable.
+    def physical_condition(self, date: str) -> dict:
+        return self.client.get("/api/mobile/userHealth/physicalCondition/detailByDate",
+                               params={"dateStr": date}) or {}
+
+    def sleep(self, date: str) -> dict:
+        """The night that ENDED on `date`."""
+        return self.client.get("/api/mobile/userHealth/sleep", params={"dateStr": date}) or {}
+
+    def sleep_standard(self) -> dict:
+        return self.client.get("/api/mobile/userHealth/sleepStandard") or {}
+
+    def wellness_full_day(self) -> dict:
+        """Latest full-day reading per Wellness Monitor indicator, with the user's own baseline band."""
+        return self.client.get("/api/mobile/userHealth/monitor/detail") or {}
+
+    def wellness_overnight(self) -> dict:
+        """Overnight readings per Wellness Monitor indicator: the 7-night trend the phone app shows."""
+        return self.client.get("/api/mobile/userHealth/monitor/index") or {}
+
+    def muscle_fatigue(self) -> list:
+        return self.client.get("/api/app/userDataStat/trainingMuscleDetail") or []
+
+    def part_fatigue(self) -> list:
+        return self.client.get("/api/app/userDataStat/trainingPartFatigueInfo") or []
+
+    def body_metrics(self) -> dict:
+        return self.client.get("/api/mobile/userHealth/newIndex/healthData") or {}
+
+    def health_scores(self) -> dict:
+        return self.client.get("/api/mobile/userHealth/newIndex/healthScore") or {}
+
+    def home_indicators(self) -> dict:
+        return self.client.get("/api/mobile/homePageInfo/topIndicatorVal") or {}
+
     # --- templates and calendar ----------------------------------------------
     def templates(self) -> list[dict]:
         return self.client.get("/api/app/v4/customTrainingTemplate/appPage",
