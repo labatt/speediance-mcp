@@ -2,13 +2,82 @@
 
 A free, open-source [MCP](https://modelcontextprotocol.io) server that lets Claude read and manage your
 **Speediance Gym Monster** training: your session history, per-set logs, exercise progress, rowing stats,
-heart rate, custom workouts and schedule — plus a coaching memory of your goals, injuries and preferences.
+heart rate, custom workouts and schedule — plus off-machine training and a coaching memory of your goals,
+injuries and preferences.
 
 It's a self-hosted alternative to GM Manager. It runs on your own computer, talks directly to Speediance,
 and keeps everything it stores on your machine.
 
 > **Unofficial.** Not affiliated with or endorsed by Speediance. It uses the private API behind the
 > Speediance mobile app, which can change without notice.
+
+## What you can do with it
+
+Once it's connected you just talk to Claude. Things that work today:
+
+**Review what you actually did**
+
+> *"How was last week?"* — sessions, minutes, volume and calories, with phone-health activity counted
+> separately from gym sessions.
+>
+> *"What did I do in Monday's session?"* — every exercise, set, rep and weight, plus rowing pace/power
+> or guided-cardio intervals where there are any.
+>
+> *"Is my bench press going anywhere?"* — that movement's trend, week by week.
+>
+> *"Compare Monday to the last time I did that workout."* — per-movement deltas in top weight, reps
+> and volume.
+
+**Plan the next one**
+
+> *"Build me a 40-minute upper session with the barbell, and skip anything that hits my left shoulder."*
+>
+> *"What weight should I use for 8 reps of Romanian deadlift, leaving 2 in reserve?"* — an Epley
+> estimate from your own best set, and it tells you what it based that on.
+>
+> *"Which muscles have I been neglecting this month?"* — volume spread across the muscles each movement
+> works (main 100%, assisting 50%), with push:pull and upper:lower ratios.
+>
+> *"Put that workout on Thursday."*
+
+**Train away from the machine**
+
+> *"At the hotel this morning I did 3×12 dumbbell bench at 40, 3×10 single-arm rows at 45 a side, and
+> 3×20 push-ups."*
+
+Claude records it and matches each movement to the Speediance library, so it counts towards your
+volume-by-muscle and can set a personal best — detail Speediance itself cannot store. Backdating works,
+so a whole trip can be caught up in one message. See [Off-machine training](#off-machine-training).
+
+**Let it remember things**
+
+> *"My left shoulder doesn't like overhead pressing — don't program it."* → saved as a hard constraint
+> and respected in every workout it builds afterwards.
+>
+> *"I've got a flat bench and a barbell, no cable attachments."* → equipment it plans around.
+>
+> *"I hate Bulgarian split squats."* → marked ⊘ avoided, and never programmed again unless you ask for
+> it by name.
+
+It also keeps your goal, training days and session length, so you don't repeat yourself — and it flags
+contradictions between saved facts instead of quietly picking one.
+
+## Off-machine training
+
+Speediance's own manual log makes a day count towards your streak, days trained, minutes and calories,
+but it stores **no exercises** — and they can't be pushed in. The session-save route is an *update* into
+a row the machine itself creates (asking it to resolve a client-invented session id returns nothing), so
+a workout that never ran on the hardware cannot be written at all.
+
+So `log_off_machine_workout` keeps that detail locally instead, and the rest of the server treats it as
+real training:
+
+- `get_muscle_balance` includes it, and reports `offMachineDays` / `offMachineSets` separately — it's
+  training, but not a session the machine recorded.
+- `get_session_detail` on a manual session serves those exercises and says where they came from.
+- Movements resolve to the library by name, which is what makes them attributable to muscles. One that
+  Speediance doesn't stock is still logged and reported as unmatched rather than refused.
+- Single-arm sets keep their side and aren't counted as both; bodyweight work is recorded, not rejected.
 
 ## Install
 
@@ -314,6 +383,40 @@ piece reports its stroke rate, pace, watts, and how much of it stayed inside the
   for a day.
 - **A workout comes back `verified: false`.** Speediance stored something different from what was sent.
   Check the workout in the Speediance app before training and please open an issue with your unit (kg or lb).
+
+## Companion project: the web app
+
+**[Unofficial SmartGym Workout Manager](https://github.com/labatt/speediance-smartgym-workout-manager)**
+is a separate, free Flask app over the same Speediance data — a browser UI rather than a conversation.
+The two projects are independent and each works alone.
+
+|  | speediance-mcp (this) | The web app |
+|---|---|---|
+| Interface | Conversation with Claude | Browser UI you click through |
+| Best at | Asking questions, planning, "log what I did at the hotel" | Charts, the workout builder, scanning history, schedule grids |
+| Per-rep telemetry | — | Power/resistance charts per rep, form scores |
+| Personal bests | — | Dashboard cards, all-time |
+| Coaching memory | Full curated facts: injuries, goals, schedule, equipment | Avoided exercises |
+| Off-machine logging | `log_off_machine_workout` in chat | A form at `/offmachine` |
+| Runs as | A local process Claude launches, or a remote server | A Flask site you host |
+
+**This server works on its own.** It never imports the web app and never calls it over the network.
+
+**If you run both, they share one SQLite file** in this server's data folder, so they can't disagree:
+
+- Exercises you mark ⊘ **avoided** here are respected there, and vice versa.
+- **Off-machine workouts** you log through Claude show up immediately in the web app's dashboard,
+  history and personal bests.
+- Owned/unusable **equipment** and coaching preferences are shared.
+
+Both projects declare the shared tables identically, and a test fails if the two definitions ever drift.
+One asymmetry worth knowing: the web app maintains a cache of per-session stats used for its personal-best
+cards. This server neither writes nor reads it, so nothing here depends on the web app being installed.
+
+> **Running both? Use different client types.** Speediance allows one live session per *client type*, so
+> point them at different ones — e.g. this server on `nano` and the web app on `bike` — or signing in with
+> one signs the other out. See
+> [Choose a client type](#choose-a-client-type-so-you-dont-get-signed-out-of-your-phone-or-your-machine).
 
 ## Your data
 
