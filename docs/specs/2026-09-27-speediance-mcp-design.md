@@ -251,7 +251,10 @@ Owned equipment is stored **by accessory name**, so it holds across Monster mode
 | `update_workout` | `code`, `name?`, `exercises?` | Same as create. Omitted fields keep their current value; `exercises`, when given, replaces the list | same route, with `id`/`code` |
 | `delete_workout` | `code` | `{deleted:true}` | `DELETE customTrainingTemplate?ids=` |
 
-`exercises[]` items: `{group_id | name, sets:[{reps | seconds, weight | level, side?}], preset?, rest_seconds?}`.
+`exercises[]` items: `{group_id | name, sets:[{reps | seconds, weight | level, side?, mode?}], rest_seconds?}`.
+`mode` is `standard` (default), `chain` or `eccentric`, written to the per-set `sportMode` CSV as 1/2/3
+(verified: the machine's edit screen stored Standard/Chain/Eccentric as `"1,2,3"`). The chain/eccentric
+overload amount is not stored in a template; the user dials it in on the machine.
 A `name` is resolved against the library (exact, then prefix, then all-words); an ambiguous
 name fails with the candidates rather than guessing.
 
@@ -347,13 +350,18 @@ upper bound. Skipped sets: reps sets skip on `done == 0`, timed/level sets on `s
 Encoded in `speediance.writes`:
 
 1. `totalCapacity` is **never null** (null → HTTP 500). Always a computed number.
-2. **Unit-dependent preset and capacity.** The server appears to read these fields as
-   pounds.
-   - **lb accounts:** `templatePresetId: -1` with weights verbatim, `totalCapacity` as the
-     raw sum. This is the author's app's behavior, live-verified (35 saved → 35 lb shown).
-   - **kg accounts:** `templatePresetId: 1` and `totalCapacity × 2.2`, per
-     pookey/speediance-cli, which verified it on kg accounts (a non-positive preset there
-     divides every weight by 2.2).
+2. **Customize preset, unit-dependent wire format.** Every movement is sent with
+   `templatePresetId: -1`, the app's "Customize" mode, where the machine runs the stored weights.
+   Positive ids are the app's presets (`templatePresetList`: 1 Gain Muscle, 3 Stamina, 5 Strength),
+   which load from the user's 1RM instead. `build_template` works in the display unit (what `verify`
+   compares); `wire_body` converts at save time.
+   - **lb accounts:** sent as built: weights verbatim, `totalCapacity` as the raw sum.
+     Live-verified (35 saved → 35 lb shown).
+   - **kg accounts:** the server reads a -1 movement's `weights`/`capacity` as pounds, so they go
+     out × 2.2, and `totalCapacity` × 2.2 whatever the preset. Verified live 2026-09-30: 20 kg sent
+     as 44.00 stored 20, and the machine showed 20 kg in Customize mode. Loads must be whole kg
+     up to 100: 22.5/20.5/12.5 stored as 22/20/12, and 9.5 stored as 9.50 but showed as 9 on
+     the machine, so `create_workout`/`update_workout` refuse half kilos up front.
 3. *(merged into rule 2)*
 4. A unilateral movement (`isLeftRight`) with no explicit sides gets sides auto-alternated
    `1,2,1,2,…`. All-`0` sides → HTTP 500.
@@ -487,7 +495,7 @@ Encoded in `speediance.writes`:
 
 | Assumption | How it's handled |
 |---|---|
-| The ×2.2 template/preset scaling only affects kg accounts | lb path live-verified; kg path from pookey; read-back verification (§8.3 rule 6) exposes a wrong assumption |
+| The ×2.2 template scaling only affects kg accounts | lb and kg paths both live-verified; read-back verification (§8.3 rule 6) exposes a wrong assumption |
 | Free Lift ×2.2 per-set scale | lb verified unscaled; reconciled against session totals per session (§8.4) |
 | The 14 reconstructed GM Manager tool schemas | Same names and documented behavior; parameter details may differ. Noted in the README |
 | Course/AI reservation shape | Out of scope (templates only) |
@@ -504,7 +512,7 @@ Found while grounding the implementation plan against the live API and the curre
    own rejection is passed through (§6).
 4. Exercise name is `title`; body part/muscle come from `mainMuscleGroupList`; equipment is
    a list of the accessory catalog's small ids; owned equipment is stored by name (§6).
-5. Template preset/capacity writes are unit-dependent (lb verified, kg per pookey) (§8.3).
+5. Template writes use the Customize preset (-1) with a unit-dependent wire format (lb and kg verified) (§8.3).
 6. Free Lift sets are unscaled on lb accounts (verified ratio 1.0) (§8.4).
 7. RM presets are out of scope for phase 1 (§6).
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import unittest
 
@@ -8,13 +9,14 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from speediance_mcp.tools import workouts
 from tests import fixtures as fx
-from tests.helpers import api_error, make_app
+from tests.helpers import CREDS, api_error, make_app
 
 
 class TemplateStore:
     """Stateful fake of the template endpoints. `weight_divisor` simulates a server that shrinks loads."""
 
-    def __init__(self, weight_divisor=1.0):
+    def __init__(self, weight_divisor=1.0, kg_server=False):
+        self.kg_server = kg_server
         self.rows = copy.deepcopy(fx.TEMPLATES)
         self.details = {fx.TEMPLATES[0]["code"]: copy.deepcopy(fx.TEMPLATE_9001)}
         self.next_id = 9002
@@ -38,6 +40,11 @@ class TemplateStore:
              "weights": ",".join(f"{float(w) / self.weight_divisor:.1f}" for w in a["weights"].split(",")),
              "level": a["level"], "leftRight": a["leftRight"], "breakTime2": a["breakTime2"]}
             for i, a in enumerate(body["actionLibraryList"])]}
+        for sent, stored in zip(body["actionLibraryList"], self.details[row["code"]]["actionLibraryList"]):
+            stored["sportMode"] = sent["sportMode"]
+            if self.kg_server and sent["templatePresetId"] <= 0:
+                # A kg account's server reads a non-positive preset's weights as pounds (live, 2026-08-01).
+                stored["weights"] = ",".join(f"{float(w) / 2.2:.1f}" for w in stored["weights"].split(","))
         return True
 
     def delete(self, request):
@@ -67,7 +74,8 @@ class TestWorkoutTools(unittest.TestCase):
         self.assertEqual(listed["slots"], {"used": 1, "limit": None, "left": None})
         got = workouts.get_workout(app, "a" * 24)
         self.assertEqual(got["exercises"][0]["kind"], "reps")
-        self.assertEqual(got["exercises"][0]["sets"][0], {"reps": 12, "weight": 30.0, "side": None, "rest": 60})
+        self.assertEqual(got["exercises"][0]["sets"][0],
+                         {"reps": 12, "weight": 30.0, "side": None, "rest": 60, "mode": "standard"})
         with self.assertRaises(ToolError):
             workouts.get_workout(app, "nope")
 
@@ -356,6 +364,62 @@ class TestWorkoutTools(unittest.TestCase):
                       "sets": [{"reps": 8, "weight": 50}]}]
         with self.assertRaises(ToolError):
             workouts.create_workout(app, "Push", exercises)
+        self.assertEqual(fake.calls("POST", fx.SAVE_TEMPLATE_PATH), [])
+
+
+KG_CREDS = dataclasses.replace(CREDS, unit="kg")
+
+
+class TestSetModesAndKgWrites(unittest.TestCase):
+    def test_create_with_modes_on_kg_account(self):
+        store = TemplateStore(kg_server=True)
+        app, _ = make_app(self, store.routes(), creds=KG_CREDS)
+        sets = [{"reps": 12, "weight": 20}, {"reps": 12, "weight": 22, "mode": "chain"},
+                {"reps": 12, "weight": 7, "mode": "eccentric"}]
+        got = workouts.create_workout(app, "Modes", [{"name": "bent over row", "sets": sets}])
+        self.assertTrue(got["verified"], got.get("mismatches"))
+        action = store.posts[0]["actionLibraryList"][0]
+        self.assertEqual((action["templatePresetId"], action["sportMode"]), (-1, "1,2,3"))
+        self.assertEqual(action["weights"], "44.00,48.40,15.40")
+        read = workouts.get_workout(app, got["code"])["exercises"][0]
+        self.assertEqual(read["presetName"], "Customize")
+        self.assertEqual([(s["weight"], s["mode"]) for s in read["sets"]],
+                         [(20.0, "standard"), (22.0, "chain"), (7.0, "eccentric")])
+
+    def test_kg_half_kilo_is_refused_before_any_write(self):
+        store = TemplateStore(kg_server=True)
+        app, fake = make_app(self, store.routes(), creds=KG_CREDS)
+        for weight, expected in ((22.5, "use 22 or 23"), (9.5, "use 9 or 10"), (101, "maximum is 100")):
+            with self.subTest(weight=weight), self.assertRaises(ToolError) as caught:
+                workouts.create_workout(app, "Modes", [{"name": "bent over row",
+                                                        "sets": [{"reps": 8, "weight": weight}]}])
+            self.assertIn(expected, str(caught.exception))
+        self.assertEqual(fake.calls("POST", fx.SAVE_TEMPLATE_PATH), [])
+
+    def test_lb_half_pound_still_allowed(self):
+        store = TemplateStore()
+        app, _ = make_app(self, store.routes())
+        got = workouts.create_workout(app, "Half", [{"name": "bent over row", "sets": [{"reps": 8, "weight": 22.5}]}])
+        self.assertTrue(got["verified"])
+
+    def test_rename_on_kg_account_keeps_training_preset_and_loads(self):
+        store = TemplateStore(kg_server=True)
+        detail = copy.deepcopy(fx.TEMPLATE_9001)
+        detail["actionLibraryList"][0]["sportMode"] = "1,3"
+        store.details[fx.TEMPLATES[0]["code"]] = detail
+        app, _ = make_app(self, store.routes(), creds=KG_CREDS)
+        got = workouts.update_workout(app, "a" * 24, name="Pull Day v2")
+        self.assertTrue(got["verified"], got.get("mismatches"))
+        action = store.posts[0]["actionLibraryList"][0]
+        self.assertEqual((action["templatePresetId"], action["sportMode"], action["weights"]), (-1, "1,3", "66.00,88.00"))
+
+    def test_bad_mode_writes_nothing(self):
+        store = TemplateStore()
+        app, fake = make_app(self, store.routes())
+        with self.assertRaises(ToolError) as caught:
+            workouts.create_workout(app, "Modes", [{"name": "bent over row",
+                                                    "sets": [{"reps": 8, "weight": 20, "mode": "drop set"}]}])
+        self.assertIn("mode", str(caught.exception))
         self.assertEqual(fake.calls("POST", fx.SAVE_TEMPLATE_PATH), [])
 
 

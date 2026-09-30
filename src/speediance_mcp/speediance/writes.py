@@ -1,9 +1,11 @@
 """Build, read back and verify custom-template bodies (spec §8.3). Pure.
 
-Write-fault rules: totalCapacity is never null; templatePresetId and totalCapacity depend on the
-account unit (lb: -1 and the raw sum — verified live; kg: 1 and x2.2 — per pookey/speediance-cli);
-unilateral movements auto-alternate sides; counterweight2 is always empty; every write is verified
-by reading the template back.
+Write-fault rules: totalCapacity is never null; every movement is sent with templatePresetId -1
+(the app's "Customize" mode, where the machine runs the per-set weights and modes); on a kg account
+the server reads a -1 movement's weights and capacity as pounds, so wire_body sends them x2.2, and
+totalCapacity x2.2 always; unilateral movements auto-alternate sides; counterweight2 is always
+empty; a kg account's loads are whole kg up to 100 (validate_sets with unit="kg"); every write is
+verified by reading the template back.
 """
 
 from __future__ import annotations
@@ -12,6 +14,24 @@ import math
 
 KG_LB_SCALE = 2.2
 MAX_WEIGHT = 1000.0
+# A template on a kg account holds whole kg only, up to the machine's 100 kg. Verified live
+# 2026-09-30: 22.5, 20.5 and 12.5 were stored as 22, 20 and 12. 9.5 was stored as "9.50", but the
+# machine showed 9 for it, so half-kg loads under 10 kg don't survive a template either.
+MAX_KG = 100
+# templatePresetId for every written movement. -1 is the app's "Customize" mode (confirmed on the
+# machine, 2026-09-30): the machine runs the stored per-set weights. A positive id is one of the
+# app's presets, where the load comes from the preset and the user's 1RM instead; the machine
+# ignored the stored weights at preset 1 (pookey's coach client, 2026-08-14). Every movement of an
+# app-authored template is -1. The dynamic-weight mode (sportMode) applies under any preset.
+CUSTOMIZE_PRESET = -1
+# Preset names, from the `templatePresetList` Speediance attaches to every template movement
+# (read live 2026-09-30). -1 is not in that list; its name is from the machine.
+PRESET_NAMES = {-1: "Customize", 1: "Gain Muscle", 3: "Stamina", 5: "Strength"}
+# Per-set sportMode codes, as the machine's edit screen writes them (verified live 2026-09-30:
+# Standard / Chain / Eccentric on sets 1-3 stored "1,2,3"). The overload amount of a chain or
+# eccentric set is not stored anywhere: the user dials it in on the machine.
+SET_MODES = {"standard": 1, "chain": 2, "eccentric": 3}
+MODE_NAMES = {code: name for name, code in SET_MODES.items()}
 
 
 def _int(value, default=0) -> int:
@@ -87,7 +107,40 @@ def _set_side(raw: dict, number: int) -> int | None:
     return int(as_float) or None
 
 
-def validate_sets(kind: str, sets, default_rest: int = 60) -> list[dict]:
+def _set_mode(raw: dict, number: int) -> int:
+    """A set's sportMode code: a name from SET_MODES, or a positive code as get_workout returns an
+    unknown one. Missing -> 1 (standard)."""
+    value = raw.get("mode")
+    if value is None:
+        return 1
+    if isinstance(value, str) and value.strip().lower() in SET_MODES:
+        return SET_MODES[value.strip().lower()]
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 99:
+        return value
+    raise ValueError(f"set {number}: mode must be one of {', '.join(SET_MODES)}")
+
+
+def mode_name(code) -> str | int:
+    """A sportMode code as its name; an unknown code stays a number."""
+    code = _int(code, 1) or 1
+    return MODE_NAMES.get(code, code)
+
+
+def _kg_load(weight: float, number: int) -> None:
+    """A kg template load is whole kg, up to MAX_KG. Refused up front with the nearest loads, rather
+    than letting Speediance cut it and the read-back fail."""
+    if weight > MAX_KG:
+        raise ValueError(f"set {number}: the machine's maximum is {MAX_KG} kg")
+    if weight != int(weight):
+        low, high = int(weight), int(weight) + 1
+        raise ValueError(f"set {number}: {weight:g} kg can't be saved in a template — templates hold whole kg "
+                         f"only (Speediance cuts {weight:g} to {low}), so use {low} or {high}, and the user can "
+                         "fine-tune the load on the machine")
+
+
+def validate_sets(kind: str, sets, default_rest: int = 60, *, unit: str | None = None) -> list[dict]:
+    """Sets as the builder takes them. unit="kg" also enforces the kg template grid; the rebuild of a
+    stored template leaves it out, so loads Speediance already holds go back unchanged."""
     if not isinstance(sets, list) or not sets:
         raise ValueError("needs at least one set")
     if len(sets) > 20:
@@ -97,6 +150,7 @@ def validate_sets(kind: str, sets, default_rest: int = 60) -> list[dict]:
         if not isinstance(raw, dict):
             raise ValueError(f"set {number} must be an object")
         side = _set_side(raw, number)
+        mode = _set_mode(raw, number)
         rest = _int(raw.get("rest", raw.get("rest_seconds", default_rest)), default_rest)
         if not 0 <= rest <= 600:
             raise ValueError(f"set {number}: rest must be 0-600 seconds")
@@ -105,7 +159,9 @@ def validate_sets(kind: str, sets, default_rest: int = 60) -> list[dict]:
             weight = _weight(raw, number)
             if not 1 <= reps <= 100:
                 raise ValueError(f"set {number}: reps must be 1-100")
-            out.append({"reps": reps, "weight": weight, "side": side, "rest": rest})
+            if unit == "kg":
+                _kg_load(weight, number)
+            out.append({"reps": reps, "weight": weight, "side": side, "rest": rest, "mode": mode})
         else:
             seconds = _whole(raw, "seconds", number)
             if not 1 <= seconds <= 3600:
@@ -115,7 +171,7 @@ def validate_sets(kind: str, sets, default_rest: int = 60) -> list[dict]:
                 level = _whole(raw, "level", number)
                 if level < 1:
                     raise ValueError(f"set {number}: Vita movements need a level of 1 or more")
-            out.append({"seconds": seconds, "level": level, "side": side, "rest": rest})
+            out.append({"seconds": seconds, "level": level, "side": side, "rest": rest, "mode": mode})
     return out
 
 
@@ -128,8 +184,8 @@ def _side(spec: dict, raw: dict, index: int) -> str:
 
 
 def _stored_mode_csv(spec: dict, key: str, count: int) -> str:
-    """A spec's optional stored `sportMode`/`selectCompletionMethod` CSV, when its entry count
-    matches the set count; otherwise the "1" per set default."""
+    """A spec's optional stored `selectCompletionMethod` CSV, when its entry count matches the set
+    count; otherwise the "1" per set default."""
     values = _csv(spec.get(key))
     if len(values) == count:
         return ",".join(values)
@@ -137,7 +193,8 @@ def _stored_mode_csv(spec: dict, key: str, count: int) -> str:
 
 
 def build_template(name: str, specs: list[dict], *, unit: str, device_type: int, template_id=None) -> dict:
-    preset = -1 if unit == "lb" else 1
+    """The body in the account's display unit, which is what verify compares against. `unit` is
+    not applied here: the server's unit handling is wire_body's, at save time."""
     actions, total = [], 0.0
     for spec in specs:
         sets, kind = spec["sets"], spec["kind"]
@@ -148,11 +205,11 @@ def build_template(name: str, specs: list[dict], *, unit: str, device_type: int,
         actions.append({
             "groupId": int(spec["groupId"]),
             "actionLibraryId": int(spec["variantId"]),
-            "templatePresetId": preset,
+            "templatePresetId": CUSTOMIZE_PRESET,
             "setsAndReps": ",".join(str(s["seconds"] if timed else s["reps"]) for s in sets),
             "breakTime": rests,
             "breakTime2": rests,
-            "sportMode": _stored_mode_csv(spec, "sportMode", len(sets)),
+            "sportMode": ",".join(str(s.get("mode") or 1) for s in sets),
             "leftRight": ",".join(_side(spec, s, i) for i, s in enumerate(sets)),
             "selectCompletionMethod": _stored_mode_csv(spec, "selectCompletionMethod", len(sets)),
             "completionMethod": ",".join(("2" if timed else "1") for _ in sets),
@@ -164,11 +221,30 @@ def build_template(name: str, specs: list[dict], *, unit: str, device_type: int,
             "capacity": round(capacity, 1),
         })
     body = {"name": name, "actionLibraryList": actions,
-            "totalCapacity": round(total * (KG_LB_SCALE if unit == "kg" else 1.0), 1),
+            "totalCapacity": round(total, 1),
             "deviceType": int(device_type), "bgColor": 0}
     if template_id is not None:
         body["id"] = int(template_id)
     return body
+
+
+def wire_body(body: dict, unit: str) -> dict:
+    """The body as it goes over the wire. build_template's body is in the account's display unit,
+    which is what verify compares the read-back against. On a kg account the server reads a
+    non-positive preset's `weights` and `capacity` as pounds and stores them divided by 2.2, and
+    reads `totalCapacity` that way whatever the preset, so those go out x2.2. lb accounts go out
+    as built. Returns a copy."""
+    if unit != "kg":
+        return body
+    actions = []
+    for action in body["actionLibraryList"]:
+        action = dict(action)
+        if _int(action.get("templatePresetId")) <= 0:
+            action["weights"] = ",".join(f"{(_float(w) or 0.0) * KG_LB_SCALE:.2f}" for w in _csv(action["weights"]))
+            action["capacity"] = round((action.get("capacity") or 0.0) * KG_LB_SCALE, 2)
+        actions.append(action)
+    return {**body, "actionLibraryList": actions,
+            "totalCapacity": round((body.get("totalCapacity") or 0.0) * KG_LB_SCALE, 1)}
 
 
 def read_template(detail: dict) -> dict:
@@ -177,6 +253,7 @@ def read_template(detail: dict) -> dict:
     for action in actions:
         counts, weights = _csv(action.get("setsAndReps")), _csv(action.get("weights"))
         levels, sides = _csv(action.get("level")), _csv(action.get("leftRight"))
+        modes = _csv(action.get("sportMode"))
         rests = _csv(action.get("breakTime2") or action.get("breakTime"))
         sets = []
         for i, count in enumerate(counts):
@@ -185,10 +262,12 @@ def read_template(detail: dict) -> dict:
                          "weight": _float(weights[i]) if i < len(weights) else None,
                          "level": _int(levels[i]) if i < len(levels) else 0,
                          "side": side if side in (1, 2) else None,
-                         "rest": _int(rests[i], None) if i < len(rests) else None})
+                         "rest": _int(rests[i], None) if i < len(rests) else None,
+                         "mode": _int(modes[i], 1) or 1 if i < len(modes) else 1})
         exercises.append({"name": action.get("title") or "", "actionLibraryId": action.get("actionLibraryId"),
-                          "presetId": action.get("templatePresetId"), "sets": sets,
-                          "sportMode": action.get("sportMode"),
+                          "presetId": action.get("templatePresetId"),
+                          "presetName": PRESET_NAMES.get(_int(action.get("templatePresetId"), None)),
+                          "sets": sets,
                           "selectCompletionMethod": action.get("selectCompletionMethod")})
     return {"id": detail.get("id"), "code": detail.get("code"), "name": detail.get("name"),
             "durationMinute": detail.get("durationMinute"), "exercises": exercises}
@@ -199,10 +278,11 @@ def sets_for_kind(kind: str, stored_sets: list[dict], default_rest: int = 60) ->
     for s in stored_sets:
         rest = s["rest"] if s["rest"] is not None else default_rest
         if kind == "reps":
-            out.append({"reps": s["count"], "weight": s["weight"] or 0.0, "side": s["side"], "rest": rest})
+            out.append({"reps": s["count"], "weight": s["weight"] or 0.0, "side": s["side"], "rest": rest,
+                        "mode": s["mode"]})
         else:
             out.append({"seconds": s["count"], "level": (s["level"] or None) if kind == "level" else None,
-                        "side": s["side"], "rest": rest})
+                        "side": s["side"], "rest": rest, "mode": s["mode"]})
     return out
 
 
@@ -232,6 +312,10 @@ def verify(body: dict, stored: dict | None) -> list[str]:
         got_levels = [_int(x) for x in got_levels_raw]
         if (got_levels_raw or any(sent_levels)) and sent_levels != got_levels:
             problems.append(f"{label}: levels sent {s['level']} but stored {g.get('level')}")
+        sent_modes = [_int(x, 1) for x in _csv(s["sportMode"])]
+        got_modes = [_int(x, 1) for x in _csv(g.get("sportMode"))]
+        if (got_modes or any(m != 1 for m in sent_modes)) and sent_modes != got_modes:
+            problems.append(f"{label}: set modes sent {s['sportMode']} but stored {g.get('sportMode')}")
         if _csv(s["breakTime2"]) != _csv(g.get("breakTime2")):
             problems.append(f"{label}: rest sent {s['breakTime2']} but stored {g.get('breakTime2')}")
         if g.get("templatePresetId") is not None and s["templatePresetId"] != g.get("templatePresetId"):
