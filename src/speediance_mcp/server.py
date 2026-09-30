@@ -55,6 +55,10 @@ EXERCISE MARKS — ★preferred and ⊘avoided movements:
 TEMPLATES — accounts hold a limited number of custom workouts. Prefer update_workout over creating new
 ones, and never delete a template to make room without asking. After create/update, check `verified`.
 
+SCHEDULING — schedule_workout books either one of the user's templates (`code`) or one of Speediance's
+official courses (`course_code`), never both. Find courses with browse_programs: a `query` lists matching
+single courses, a program_id lists each day's courses. Check `verified` after booking a course.
+
 OFF-MACHINE TRAINING — work done away from the Gym Monster (hotel gyms, free weights, travel):
 - When the user describes training that did NOT happen on the machine, record it with
   log_off_machine_workout. Speediance's own manual entry (which they add in the app) already makes the

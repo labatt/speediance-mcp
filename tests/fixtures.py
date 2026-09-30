@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import json
 
 TODAY = dt.date(2026, 8, 31)
 
@@ -14,6 +15,9 @@ TEMPLATE_DETAIL_PATH = "/api/app/v3/customTrainingTemplate/detailByCode"
 SAVE_TEMPLATE_PATH = "/api/app/v2/customTrainingTemplate"
 DELETE_TEMPLATE_PATH = "/api/app/customTrainingTemplate"
 RESERVE_PATH = "/api/app/templateReservation"
+COURSE_RESERVE_PATH = "/api/app/courseReservation"
+COURSES_PATH = "/api/app/v2/course/page"
+CALENDAR_PATH = "/api/app/v5/trainingCalendar/monthNew"
 DETAIL = "/api/app/trainingInfo/"
 
 PROFILE = {"appUserId": 1001, "email": "athlete@example.com", "sex": 1, "weight": 80.0,
@@ -197,7 +201,58 @@ TEMPLATE_9001 = {"id": 9001, "code": "a" * 24, "name": "Pull Day", "durationMinu
 PROGRAMS = [{"id": 77, "name": "Strength Foundations", "description": "Eight weeks of basics.", "weekCount": 8,
              "weekTrainingFrequency": 3, "difficultyId": 1, "isPermission": True}]
 PROGRAM_77 = {"id": 77, "name": "Strength Foundations", "weekCount": 8,
-              "weekList": [{"name": "Week 1"}, {"name": "Week 2"}]}
+              "weekList": [{"name": "Week 1"}, {"name": "Week 2"}],
+              "exclusivePlanWeekList": [{"id": 1, "exclusivePlanDayList": [
+                  {"id": 11, "day": 1, "courseList": [{"id": 2577, "code": "c" * 24, "courseTitle": "All Around the Chest",
+                                                       "durationMinute": 53, "difficultyId": 3}]},
+                  {"id": 12, "day": 2, "courseList": []}]}]}
+
+# Official course catalogue rows, trimmed from /api/app/v2/course/page (ids and codes altered).
+COURSES = [
+    {"id": 2577, "code": "c" * 24, "courseTitle": "All Around the Chest", "durationMinute": 53, "difficultyId": 3,
+     "deviceType": 1, "categoryList": [{"id": 24, "categoryName": "Strength Training"}]},
+    {"id": 2816, "code": "d" * 24, "courseTitle": "Base & Engine #1", "durationMinute": 37, "difficultyId": 1,
+     "deviceType": 1, "categoryList": [{"id": 30, "categoryName": "Hyrox"}]},
+]
+
+# A booked course as the month calendar shows it (live 2026-09-30): type 1, courseReservationId, code.
+def booked_course(course: dict) -> dict:
+    return {"type": 1, "courseId": course["id"], "title": course["courseTitle"], "isFinish": 0,
+            "durationMinute": course["durationMinute"], "isReservation": True, "courseReservationId": 213000,
+            "code": course["code"], "courseMode": 2, "deviceType": 1}
+
+
+def course_page_route(courses):
+    def handler(request):
+        params = request.url.params
+        page, size = int(params.get("pageNo", 1)), int(params.get("pageSize", 10))
+        return courses[(page - 1) * size: page * size]
+    return handler
+
+
+def course_booking_routes(routes: dict, *, accept=True, sticks=True) -> dict:
+    """Make course reservations stateful: a booking POST adds the course to that day's calendar and a
+    removal takes it off. accept=False answers data:false; sticks=False accepts but never shows it."""
+    booked: dict[str, list] = {}
+    by_code = {c["code"]: c for c in COURSES}
+
+    def reserve(request):
+        body = json.loads(request.content)
+        day = booked.setdefault(body["thatDay"], [])
+        if sticks and accept and body["status"] == 1:
+            day.append(booked_course(by_code[body["courseCode"]]))
+        elif sticks and accept:
+            day[:] = [p for p in day if p["code"] != body["courseCode"]]
+        return accept
+
+    def calendar(request):
+        month = request.url.params["date"]
+        return [{"date": d, "trainingPlanList": list(plans)} for d, plans in sorted(booked.items())
+                if d.startswith(month)]
+
+    routes[("POST", COURSE_RESERVE_PATH)] = reserve
+    routes[("GET", CALENDAR_PATH)] = calendar
+    return routes
 
 
 def history_route(records):
@@ -244,7 +299,7 @@ def standard_routes() -> dict:
         ("GET", DETAIL + "freeTrainingDetail/7002"): AEROBIC_INTERVALS,
         ("GET", "/api/app/watchMsg/getHeartRateGraph"): HEART_RATE,
         ("GET", "/api/mobile/v2/report/userTrainingDataStat"): RANGE_STAT,
-        ("GET", "/api/app/v5/trainingCalendar/monthNew"): CALENDAR_2026_08,
+        ("GET", CALENDAR_PATH): CALENDAR_2026_08,
         ("GET", "/api/app/actionLibraryTab/list"): TABS,
         ("GET", "/api/app/actionLibraryGroup/trainingPartGroup"):
             lambda req: GROUPS_BY_TAB.get(int(req.url.params["tabId"]), []),
@@ -257,6 +312,7 @@ def standard_routes() -> dict:
         ("POST", RESERVE_PATH): True,
         ("GET", "/api/mobile/exclusivePlan/page"): PROGRAMS,
         ("GET", "/api/app/exclusivePlan/77"): PROGRAM_77,
+        ("GET", COURSES_PATH): course_page_route(COURSES),
     }
     for item in LIBRARY:
         routes[("GET", f"/api/app/actionLibraryGroup/{item['id']}")] = item
