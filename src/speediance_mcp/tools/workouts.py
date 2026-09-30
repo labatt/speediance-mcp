@@ -4,7 +4,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from ..library import accessory_names, summarize_exercise, variant_id
 from ..speediance.client import Rejected
-from ..speediance.writes import build_template, read_template, sets_for_kind, validate_sets, verify
+from ..speediance.writes import build_template, carry_unmodelled, read_template, sets_for_kind, validate_sets, verify
 from ._common import resolve_group
 
 MAX_NAME = 60
@@ -203,14 +203,16 @@ def create_workout(app, name: str, exercises: list[dict]) -> dict:
 def update_workout(app, template_id: str | int, name: str | None = None, exercises: list[dict] | None = None) -> dict:
     """Edit a template in place (an edit never uses a new slot). `template_id` is its `code` (preferred)
     or numeric id. Omitted fields keep their current value; `exercises`, when given, replaces the whole
-    list (same format as create_workout) — start from get_workout. Verified by read-back.
+    list (same format as create_workout) — start from get_workout. Movements you leave unchanged keep
+    any app counterweight setting; changed ones lose it (listed in counterweightDropped — tell the
+    user). Verified by read-back.
     The reply carries the user's hardConstraints and legacyUnreviewed facts when there are any.
     Re-check these against the workout before telling the user it's done."""
     row = _row_by_code(app, template_id)
+    detail = app.api.template(row["code"])
+    if not detail:
+        raise ToolError(f"Speediance returned no detail for template {template_id!r}.")
     if exercises is None:
-        detail = app.api.template(row["code"])
-        if not detail:
-            raise ToolError(f"Speediance returned no detail for template {template_id!r}.")
         specs = _specs_from_stored(app, detail)
     else:
         specs = _resolve_specs(app, exercises)
@@ -222,6 +224,7 @@ def update_workout(app, template_id: str | int, name: str | None = None, exercis
     # 2026-09-27), so a duplicate shows up as a new CODE, not a new id.
     before_codes = {r.get("code") for r in app.api.templates()}
     body = build_template(new_name, specs, unit=app.api.unit, device_type=app.api.device_type, template_id=row["id"])
+    dropped = carry_unmodelled(body, detail)
     app.api.save_template(body)
     rows_after = app.api.templates()
     matching = next((r for r in rows_after if r.get("code") == row["code"]), None)
@@ -241,6 +244,10 @@ def update_workout(app, template_id: str | int, name: str | None = None, exercis
     result_row = {"id": matching.get("id") if matching else row["id"], "code": row["code"],
                   "name": matching.get("name") if matching else None}
     out = {**_verified(app, body, result_row), **avoided, **_fact_guard(app)}
+    if dropped:
+        out["counterweightDropped"] = dropped
+        out["counterweightNote"] = ("These movements had an app counterweight/preset setting and their sets were "
+                                    "changed, so it was cleared; the new weights are what's saved. Tell the user.")
     if problems:
         out["verified"] = False
         out["mismatches"] = problems + out.get("mismatches", [])
