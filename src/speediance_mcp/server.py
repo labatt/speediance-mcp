@@ -67,6 +67,11 @@ OFF-MACHINE TRAINING — work done away from the Gym Monster (hotel gyms, free w
   are real training, but not sessions the machine recorded. Never describe them as machine work.
 - delete_off_machine_day only touches our log, never Speediance. Ask the user before calling it.
 
+PERSONAL BESTS — get_session_detail flags each exercise Speediance itself marked as a PB (weight, volume,
+1RM) and summarises them per session. They were true when the session was saved, not necessarily now. Only
+custom-template sessions carry them; empty means no flag, not no PB. Chain-mode sets can inflate the weight
+and volume flags. Say where a PB claim comes from: Speediance's flag, not one we computed.
+
 UNITS — every weight is already in the account's displayUnit. Never convert.
 """
 

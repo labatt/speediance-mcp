@@ -68,6 +68,13 @@ CTT_5000 = [
      ]},
 ]
 
+# Same session as CTT_5001 as Speediance flags personal bests: 0/1 per exercise, trimmed from a live
+# cttTrainingInfoDetail payload. The row is a weight + volume PB, the fly none, and oneRepMaxPr is 0.
+CTT_5001_PB = [
+    {**CTT_5001[0], "maxWeightPr": 1, "totalCapacityPr": 1, "oneRepMaxPr": 0},
+    {**CTT_5001[1], "maxWeightPr": 0, "totalCapacityPr": 0, "oneRepMaxPr": 0},
+]
+
 SUMMARY_5001 = {"trainingTime": 1949, "calorie": 341, "totalCapacity": 7745.0}
 
 # A quick single-exercise strength session (type 7 via freeTraining, no cardio data): the
