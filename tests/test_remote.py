@@ -112,7 +112,7 @@ class TestRemote(RemoteBase):
         session = init.headers.get("mcp-session-id")
         self.mcp(token["access_token"], "notifications/initialized", session=session, id_=None)
         tools = sse_json(self.mcp(token["access_token"], "tools/list", session=session, id_=2))
-        self.assertEqual(len(tools["result"]["tools"]), 32)
+        self.assertEqual(len(tools["result"]["tools"]), 33)
 
     def test_refresh_then_replay(self):
         token = self.connect()
