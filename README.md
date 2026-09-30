@@ -386,7 +386,7 @@ piece reports its stroke rate, pace, watts, and how much of it stayed inside the
 
 ## Companion project: the web app
 
-**[Unofficial SmartGym Workout Manager](https://github.com/labatt/speediance-smartgym-workout-manager)**
+**[SmartGym Workout Manager for Speediance](https://github.com/labatt/speediance-smartgym-workout-manager)**
 is a separate, free Flask app over the same Speediance data — a browser UI rather than a conversation.
 The two projects are independent and each works alone.
 
