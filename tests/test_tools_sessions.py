@@ -183,3 +183,68 @@ class TestHeartRateAndStats(unittest.TestCase):
         with self.assertRaises(ToolError) as cm:
             sessions.get_calendar(app, "2026-08")
         self.assertIn("speediance-mcp login", str(cm.exception))
+
+
+# Trimmed from a live custom-template session (2026-09-30): set 1 standard, set 2 chain, set 3
+# eccentric, per the user. The per-rep weights are measured force: flat for standard, rising for
+# chain, and only the concentric load for eccentric. Nothing in the session records the mode.
+CTT_5002 = [
+    {"actionLibraryName": "Kneeling Rope Crunch", "actionLibraryGroupId": 391, "completionMethod": 1,
+     "finishedReps": [
+         {"finishedCount": 12, "targetCount": 12, "time": 11, "maxHeartRate": 0.0,
+          "trainingInfoDetail": {"weights": [18.0] * 12, "leftRight": 0}},
+         {"finishedCount": 12, "targetCount": 12, "time": 13, "maxHeartRate": 0.0,
+          "trainingInfoDetail": {"weights": [20.0, 21.0, 21.0, 22.0, 21.0, 22.0, 21.0, 22.0, 22.0, 21.0, 22.0, 21.0],
+                                 "leftRight": 0}},
+         {"finishedCount": 12, "targetCount": 12, "time": 14, "maxHeartRate": 0.0,
+          "trainingInfoDetail": {"weights": [18.0, 18.0, 18.5, 19.0, 19.0, 19.0, 19.0, 19.0, 18.5, 18.0, 18.0, 18.5],
+                                 "leftRight": 0}},
+     ]},
+]
+SESSION_5002 = {"trainingId": 5002, "type": 5, "courseType": 0, "title": "Crunch test", "calorie": 12,
+                "totalCapacity": 694.5, "totalEnergy": 0.0, "startTime": "2026-01-17 16:41:00",
+                "createTime": "2026-01-17 15:43:08", "trainingTime": 120, "mileage": 0, "templateId": 9002}
+TEMPLATE_9002 = {"id": 9002, "code": "c" * 24, "name": "Crunch test", "updateTime": "2026-01-17 15:43:09",
+                 "actionLibraryList": [{"sort": 1, "actionLibraryId": 3910, "groupId": 391, "templatePresetId": -1,
+                                        "setsAndReps": "12,12,12", "weights": "18,18,18", "sportMode": "1,2,3",
+                                        "level": "0,0,0", "leftRight": "0,0,0", "breakTime2": "0,0,0"}]}
+
+
+class TestModeHint(unittest.TestCase):
+    def app_with(self, template=None, extra_history=()):
+        template = TEMPLATE_9002 if template is None else template
+        routes = fx.standard_routes()
+        routes[("GET", fx.HISTORY_PATH)] = fx.history_route(fx.HISTORY + [SESSION_5002, *extra_history])
+        routes[("GET", fx.DETAIL + "cttTrainingInfoDetail/5002")] = CTT_5002
+        routes[("GET", fx.TEMPLATES_PATH)] = [{"id": template["id"], "code": template["code"], "name": "Crunch test"}]
+        routes[("GET", fx.TEMPLATE_DETAIL_PATH)] = lambda req: template
+        app, _ = make_app(self, routes)
+        return app
+
+    def test_latest_session_carries_the_template_modes(self):
+        got = sessions.get_session_detail(self.app_with(), 5002)
+        exercise = got["exercises"][0]
+        self.assertEqual(exercise["modeHint"], ["standard", "chain", "eccentric"])
+        self.assertEqual(exercise["topWeight"], 22.0)  # the chain set's measured force, not a setting
+        self.assertIn("overload", got["modeHintNote"])
+
+    def test_no_hint_once_the_template_has_run_again(self):
+        later = {**SESSION_5002, "trainingId": 5003, "startTime": "2026-01-18 09:00:00"}
+        got = sessions.get_session_detail(self.app_with(extra_history=[later]), 5002)
+        self.assertNotIn("modeHint", got["exercises"][0])
+        self.assertNotIn("modeHintNote", got)
+
+    def test_no_hint_when_the_template_was_edited_after(self):
+        edited = {**TEMPLATE_9002, "updateTime": "2026-01-18 10:00:00"}
+        self.assertNotIn("modeHint", sessions.get_session_detail(self.app_with(edited), 5002)["exercises"][0])
+
+    def test_no_hint_when_a_machine_edit_recreated_the_template(self):
+        recreated = {**TEMPLATE_9002, "id": 9003}
+        self.assertNotIn("modeHint", sessions.get_session_detail(self.app_with(recreated), 5002)["exercises"][0])
+
+    def test_no_hint_when_set_counts_differ(self):
+        movement = {**TEMPLATE_9002["actionLibraryList"][0], "setsAndReps": "12,12", "sportMode": "1,2"}
+        fewer = {**TEMPLATE_9002, "actionLibraryList": [movement]}
+        got = sessions.get_session_detail(self.app_with(fewer), 5002)
+        self.assertNotIn("modeHint", got["exercises"][0])
+        self.assertNotIn("modeHintNote", got)
