@@ -27,11 +27,12 @@ EXPECTED_TOOLS = {
     "unschedule_workout", "get_training_stats", "compare_sessions", "browse_programs", "get_exercise",
     "list_accessories", "get_heart_rate", "get_muscle_balance",
     "log_off_machine_workout", "get_off_machine_log", "delete_off_machine_day",
+    "get_recovery", "get_readiness_trend", "get_body_metrics",
 }
 
 
 class TestServer(unittest.TestCase):
-    def test_exactly_the_32_tools_with_descriptions(self):
+    def test_exactly_the_35_tools_with_descriptions(self):
         app, _ = make_app(self)
         tools = asyncio.run(build_server(app).list_tools())
         self.assertEqual({t.name for t in tools}, EXPECTED_TOOLS)

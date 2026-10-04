@@ -1,4 +1,4 @@
-"""The MCP server: 28 tools over one Speediance account."""
+"""The MCP server: the tools over one Speediance account."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import typing
 from mcp.server.mcpserver import MCPServer
 
 from . import __version__
-from .tools import (account, calendar, coaching, exercises, memory_tools, offmachine, sessions,
+from .tools import (account, calendar, coaching, exercises, health, memory_tools, offmachine, sessions,
                     workouts)
 from .tools.errors import translate
 
@@ -67,6 +67,12 @@ OFF-MACHINE TRAINING — work done away from the Gym Monster (hotel gyms, free w
   are real training, but not sessions the machine recorded. Never describe them as machine work.
 - delete_off_machine_day only touches our log, never Speediance. Ask the user before calling it.
 
+RECOVERY — before planning or judging a hard session, read get_recovery (the snapshot carries a compact
+copy as `recovery`). Weigh trainingStatus.loadBand, sleep, outOfBaseline and fatiguedMuscles: a load ratio
+above 1.3, a short or poor night, or HRV below the user's own baseline all argue for an easier day, and a
+fatigued muscle shouldn't be loaded hard. Judge wellness values against the user's OWN band, never population
+norms. `feeds` says what answered — "error" means that data is unknown, never normal.
+
 UNITS — every weight is already in the account's displayUnit. Never convert.
 """
 
@@ -75,6 +81,7 @@ TOOLS = (
     sessions.get_calendar, sessions.get_session_detail, sessions.get_heart_rate, sessions.get_training_stats,
     coaching.get_athlete_snapshot, coaching.get_strength_profile, coaching.compare_sessions, coaching.suggest_load,
     coaching.get_muscle_balance,
+    health.get_recovery, health.get_readiness_trend, health.get_body_metrics,
     exercises.list_exercises, exercises.get_exercise, exercises.mark_exercise, exercises.list_accessories,
     exercises.get_exercise_history,
     workouts.list_my_workouts, workouts.get_workout, workouts.create_workout, workouts.update_workout,

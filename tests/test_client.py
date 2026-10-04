@@ -200,6 +200,51 @@ class TestCredentialReloadAndRelogin(unittest.TestCase):
         self.assertEqual(len(fake.calls("POST", BYPASS)), 1)
 
 
+class TestLanguageHeader(unittest.TestCase):
+    LOCALE_VARS = ("SPEEDIANCE_LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG")
+
+    def resolve(self, preferred=None, system=None, **env):
+        from unittest import mock
+        from speediance_mcp.speediance import client as client_mod
+        with mock.patch.dict(client_mod.os.environ, env, clear=False) as live, \
+                mock.patch.object(client_mod.locale, "getlocale", return_value=(system, None)):
+            for name in self.LOCALE_VARS:
+                if name not in env:
+                    live.pop(name, None)
+            return client_mod.resolve_language(preferred)
+
+    def test_regional_locale_is_reduced_to_a_bare_code(self):
+        # The server answers "en-GB" in Chinese; only the bare code works.
+        self.assertEqual(self.resolve(LANG="en_GB.UTF-8"), "en")
+        self.assertEqual(self.resolve(LANG="de_DE.UTF-8"), "de")
+
+    def test_stored_preference_beats_env_and_locale(self):
+        self.assertEqual(self.resolve("fr", SPEEDIANCE_LANGUAGE="de", LANG="it_IT.UTF-8"), "fr")
+
+    def test_env_override_beats_locale(self):
+        self.assertEqual(self.resolve(SPEEDIANCE_LANGUAGE="es", LANG="de_DE.UTF-8"), "es")
+
+    def test_unsupported_language_falls_back_to_english_not_chinese(self):
+        self.assertEqual(self.resolve(LANG="ja_JP.UTF-8"), "en")
+        self.assertEqual(self.resolve("xx"), "en")
+
+    def test_c_locale_and_nothing_set_mean_english(self):
+        self.assertEqual(self.resolve(LANG="C"), "en")
+        self.assertEqual(self.resolve(LANG="POSIX.UTF-8"), "en")
+        self.assertEqual(self.resolve(), "en")
+
+    def test_system_locale_used_when_env_is_empty(self):
+        self.assertEqual(self.resolve(system="ko_KR"), "ko")
+
+    def test_request_sends_the_accounts_language(self):
+        import dataclasses
+        fake = FakeSpeediance({("GET", PROFILE): {"appUserId": 1001}})
+        client = SpeedianceClient(dataclasses.replace(CREDS, language="de"), transport=fake.transport(),
+                                  min_interval=0)
+        client.request("GET", PROFILE)
+        self.assertEqual(fake.calls("GET", PROFILE)[0].headers["accept-language"], "de")
+
+
 class TestTimezoneHeader(unittest.TestCase):
     def test_non_ascii_zone_name_falls_back_to_gmt(self):
         from unittest import mock

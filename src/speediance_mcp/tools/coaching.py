@@ -7,6 +7,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from ..speediance import offmachine as offmachine_adapt
 from ..speediance.muscles import attribute, muscle_index, ratios, untrained
 from ..speediance.parsing import epley, round_half
+from .health import recovery_block
 from ._common import is_health_import, other_activity, record_summary, resolve_group, session_exercises
 
 MAX_SESSIONS_SCANNED = 10
@@ -50,7 +51,9 @@ def get_athlete_snapshot(app, days: int = 14) -> dict:
     Check memory.facts.constraints.hard before building any workout and respect it; raise any
     memory.facts.conflicts with the user rather than picking one. memory.facts.legacyUnreviewed holds old
     free-form facts not yet curated: they may still bind — treat injury ones as hard constraints until
-    curated, and curate them promptly with the user."""
+    curated, and curate them promptly with the user. `recovery` is today's readiness (training status,
+    last night's sleep, Wellness Monitor vs the user's own baseline, fatigued muscles) — the same as
+    get_recovery without the 7-night trends."""
     days = max(1, min(int(days), 365))
     sessions, others = _window(app, days)
     profile = app.api.profile()
@@ -78,6 +81,7 @@ def get_athlete_snapshot(app, days: int = 14) -> dict:
         },
         "history": [record_summary(r) for r in sessions],
         "otherActivities": [{"date": str(r.get("startTime", ""))[:10], **other_activity(r)} for r in others],
+        "recovery": recovery_block(app, trend=False),
     }
 
 
