@@ -394,3 +394,78 @@ class TestRebuildRefusesPresetLoads(unittest.TestCase):
                 app, _ = make_app(self, store.routes())
                 workouts.update_workout(app, "a" * 24, name="Pull Day v2")
                 self.assertEqual(len(store.posts), 1)
+
+
+class TestRoundTripKeepsStoredMovement(unittest.TestCase):
+    """get_workout -> edit -> update_workout must not swap an untouched movement's variant or its
+    completion setting (seen live 2026-10-05: a "Chest Stretch" came back as a different exercise,
+    and timed movements' selectCompletionMethod went 0 -> 1)."""
+
+    def routes_with_second_variant(self, store):
+        library = copy.deepcopy(fx.LIBRARY)
+        row = next(raw for raw in library if raw["id"] == 321)
+        row["actionLibraryList"].append({"id": 3215, "videoPath": "https://example.test/321b.mp4"})
+        table = store.routes()
+        table[("GET", "/api/app/actionLibraryGroup/list")] = fx.batch_route(library)
+        return table
+
+    def test_action_library_id_pins_the_variant(self):
+        store = TemplateStore()
+        app, _ = make_app(self, self.routes_with_second_variant(store))
+        workouts.update_workout(app, "a" * 24, exercises=[
+            {"name": "bent over row", "actionLibraryId": 3215, "sets": [{"reps": 8, "weight": 50}]}])
+        self.assertEqual(store.posts[0]["actionLibraryList"][0]["actionLibraryId"], 3215)
+
+    def test_without_action_library_id_the_first_variant_is_used(self):
+        store = TemplateStore()
+        app, _ = make_app(self, self.routes_with_second_variant(store))
+        workouts.update_workout(app, "a" * 24, exercises=[
+            {"name": "bent over row", "sets": [{"reps": 8, "weight": 50}]}])
+        self.assertEqual(store.posts[0]["actionLibraryList"][0]["actionLibraryId"], 3210)
+
+    def test_action_library_id_alone_resolves_the_group(self):
+        store = TemplateStore()
+        app, _ = make_app(self, store.routes())
+        workouts.update_workout(app, "a" * 24, exercises=[
+            {"actionLibraryId": 2940, "sets": [{"reps": 10, "weight": 20}]}])
+        self.assertEqual(store.posts[0]["actionLibraryList"][0]["groupId"], 294)
+
+    def test_get_workout_output_round_trips(self):
+        store = TemplateStore()
+        detail = copy.deepcopy(fx.TEMPLATE_9001)
+        detail["actionLibraryList"][0]["actionLibraryId"] = 3215
+        detail["actionLibraryList"][0]["selectCompletionMethod"] = "0,0"
+        store.details[fx.TEMPLATES[0]["code"]] = detail
+        app, _ = make_app(self, self.routes_with_second_variant(store))
+        current = workouts.get_workout(app, "a" * 24)
+        workouts.update_workout(app, "a" * 24, exercises=current["exercises"])
+        sent = store.posts[0]["actionLibraryList"][0]
+        self.assertEqual((sent["actionLibraryId"], sent["selectCompletionMethod"]), (3215, "0,0"))
+
+    def test_mismatched_group_and_variant_writes_nothing(self):
+        store = TemplateStore()
+        app, fake = make_app(self, store.routes())
+        with self.assertRaises(ToolError) as cm:
+            workouts.update_workout(app, "a" * 24, exercises=[
+                {"group_id": 416, "actionLibraryId": 3210, "sets": [{"reps": 8, "weight": 50}]}])
+        self.assertIn("belongs to group_id 321", str(cm.exception))
+        self.assertEqual(fake.calls("POST", fx.SAVE_TEMPLATE_PATH), [])
+
+    def test_unknown_variant_writes_nothing(self):
+        store = TemplateStore()
+        app, fake = make_app(self, store.routes())
+        with self.assertRaises(ToolError):
+            workouts.update_workout(app, "a" * 24, exercises=[
+                {"actionLibraryId": 999999, "sets": [{"reps": 8, "weight": 50}]}])
+        self.assertEqual(fake.calls("POST", fx.SAVE_TEMPLATE_PATH), [])
+
+    def test_bad_completion_method_writes_nothing(self):
+        store = TemplateStore()
+        app, fake = make_app(self, store.routes())
+        for value in ("1,x", "-1", True):
+            with self.subTest(value=value):
+                with self.assertRaises(ToolError):
+                    workouts.update_workout(app, "a" * 24, exercises=[
+                        {"name": "bent over row", "selectCompletionMethod": value,
+                         "sets": [{"reps": 8, "weight": 50}]}])
+        self.assertEqual(fake.calls("POST", fx.SAVE_TEMPLATE_PATH), [])
