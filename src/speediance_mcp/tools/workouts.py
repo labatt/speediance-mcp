@@ -4,11 +4,13 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from ..library import accessory_names, summarize_exercise, variant_id
 from ..speediance.client import Rejected
-from ..speediance.writes import build_template, read_template, sets_for_kind, validate_sets, verify
+from ..speediance.writes import build_template, read_template, rounded_loads, sets_for_kind, validate_sets, verify
 from ._common import resolve_group
 
 MAX_NAME = 60
-# templatePresetId values whose stored weights are the real, explicit loads (lb: -1, kg: 1).
+# templatePresetId values whose stored weights are the loads the user asked for. -1 is a custom
+# template; 1 is what this server wrote for kg accounts before it learnt 1 is the "Gain Muscle"
+# preset — those weights are still the user's own, and a rebuild re-saves them as -1.
 # Any other preset is a Speediance preset/RM load whose stored weights can't be rebuilt safely.
 EXPLICIT_PRESETS = (-1, 0, 1)
 
@@ -157,12 +159,17 @@ def _fact_guard(app) -> dict:
 
 
 def _verified(app, body: dict, row: dict) -> dict:
-    mismatches = verify(body, app.api.template(row["code"]))
+    stored = app.api.template(row["code"])
+    mismatches = verify(body, stored, unit=app.api.unit)
     out = {"id": row.get("id"), "code": row.get("code"), "name": row.get("name"),
            "verified": not mismatches, "exercises": len(body["actionLibraryList"])}
     if mismatches:
         out["mismatches"] = mismatches
         out["warning"] = "The saved template doesn't match what was sent — check it in the Speediance app before training."
+    rounded = rounded_loads(body, stored, unit=app.api.unit)
+    if rounded:
+        out["roundedLoads"] = rounded
+        out["roundedNote"] = "Speediance keeps whole kg on these movements and rounded the loads down — tell the user."
     return out
 
 
