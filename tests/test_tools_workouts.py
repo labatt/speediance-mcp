@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
+import math
 import unittest
 
 from mcp.server.mcpserver.exceptions import ToolError
 
 from speediance_mcp.tools import workouts
 from tests import fixtures as fx
-from tests.helpers import api_error, make_app
+from tests.helpers import CREDS, api_error, make_app
 
 
 class TemplateStore:
@@ -78,7 +80,7 @@ class TestWorkoutTools(unittest.TestCase):
         self.assertTrue(got["verified"])
         self.assertEqual((got["id"], got["exercises"]), (9002, 3))
         actions = store.posts[0]["actionLibraryList"]
-        self.assertEqual((actions[0]["actionLibraryId"], actions[0]["weights"]), (3210, "50.0,50.0"))
+        self.assertEqual((actions[0]["actionLibraryId"], actions[0]["weights"]), (3210, "50,50"))
         self.assertEqual(actions[1]["leftRight"], "1,2")
         self.assertEqual(actions[2]["level"], "12")
 
@@ -394,3 +396,42 @@ class TestRebuildRefusesPresetLoads(unittest.TestCase):
                 app, _ = make_app(self, store.routes())
                 workouts.update_workout(app, "a" * 24, name="Pull Day v2")
                 self.assertEqual(len(store.posts), 1)
+
+
+class KgTemplateStore(TemplateStore):
+    """The kg-account server: preset -1 loads arrive as lb and are kept as whole kg."""
+
+    def save(self, request):
+        result = super().save(request)
+        body = self.posts[-1]
+        row = next(r for r in self.rows if r["id"] == body["id"]) if "id" in body else self.rows[-1]
+        for action in self.details[row["code"]]["actionLibraryList"]:
+            action["weights"] = ",".join(str(math.floor(float(w) / 2.2 + 1e-9)) for w in action["weights"].split(","))
+        return result
+
+
+class TestKgAccount(unittest.TestCase):
+    def kg_app(self, store):
+        return make_app(self, store.routes(), creds=dataclasses.replace(CREDS, unit="kg"))
+
+    def test_create_sends_custom_lb_loads_and_reports_rounding(self):
+        store = KgTemplateStore()
+        app, _ = self.kg_app(store)
+        exercises = [{"name": "bent over row", "sets": [{"reps": 8, "weight": 33}, {"reps": 8, "weight": 22.5}]}]
+        got = workouts.create_workout(app, "Push", exercises)
+        self.assertTrue(got["verified"], got.get("mismatches"))
+        action = store.posts[0]["actionLibraryList"][0]
+        self.assertEqual((action["templatePresetId"], action["weights"]), (-1, "72.6,49.5"))
+        self.assertEqual(got["roundedLoads"], ["ex 1: asked 33,22.5 kg, saved 33,22 kg"])
+
+    def test_rename_repairs_a_gain_muscle_preset_template(self):
+        # Templates this server wrote for kg accounts before the fix carry preset 1 with the
+        # user's real kg loads; rebuilding them must keep those loads and switch to custom.
+        store = KgTemplateStore()
+        store.details["a" * 24]["actionLibraryList"][0]["templatePresetId"] = 1
+        app, _ = self.kg_app(store)
+        got = workouts.update_workout(app, "a" * 24, name="Pull Day v2")
+        self.assertTrue(got["verified"], got.get("mismatches"))
+        action = store.posts[0]["actionLibraryList"][0]
+        self.assertEqual((action["templatePresetId"], action["weights"]), (-1, "66,88"))
+        self.assertEqual(store.details["a" * 24]["actionLibraryList"][0]["weights"], "30,40")
