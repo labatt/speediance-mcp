@@ -150,9 +150,12 @@ KG_LB_SCALE = 2.2
 
 
 def free_scale(payload: dict) -> tuple[float, str | None]:
-    """Free Lift set figures are x2.2 on kg accounts and unscaled on lb accounts.
+    """Free Lift set capacities are x2.2 on kg accounts and unscaled on lb accounts.
 
     Reconcile the sets' capacity sum against the session's own total instead of guessing.
+    Only capacity is scaled: a set's `summary.weight` is already in the display unit (on a kg
+    account a 22 kg set has weight 22, capacity and rawRepList weights x2.2 — verified live
+    2026-10-26).
     """
     total = _num(payload.get("totalCapacity")) or 0.0
     raw = sum(_num((st.get("summary") or {}).get("totalCapacity")) or 0.0
@@ -171,7 +174,7 @@ def parse_free_exercises(payload) -> tuple[list[dict], list[str]]:
     """`freeTraining`: one object with actionList[].setList[] (summary + rawRepList)."""
     if not isinstance(payload, dict):
         return [], []
-    scale, warning = free_scale(payload)
+    _, warning = free_scale(payload)
     out = []
     for action in payload.get("actionList") or []:
         kind = kind_of(action)
@@ -186,7 +189,7 @@ def parse_free_exercises(payload) -> tuple[list[dict], list[str]]:
                 "reps": done if kind != "timed" else None,
                 "targetReps": None,
                 "seconds": seconds,
-                "weight": round(weight / scale, 1) if weight is not None else None,
+                "weight": round(weight, 1) if weight is not None else None,
                 "level": None,
                 "side": _side(summary.get("leftRight")),
                 "maxHeartRate": _heart(summary.get("maxHeartRate")),

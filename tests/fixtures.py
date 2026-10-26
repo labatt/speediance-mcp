@@ -97,7 +97,9 @@ def free_lift(session_total: float, set_capacity: float, weight: float) -> dict:
 
 
 FREE_6001 = free_lift(2000.0, 1000.0, 100)          # lb account: sets sum to the session total
-FREE_KG_SCALED = free_lift(909.09, 1000.0, 100)     # kg account: sets are 2.2x the session total
+# kg account, as the live route returns it: each set's weight is already kg (45), but its capacity
+# is 45 x 2.2 x 10 reps = 990, so the sets sum to 2.2x the session total (900 = 2 x 45 x 10).
+FREE_KG_SCALED = free_lift(900.0, 990.0, 45)
 FREE_MISMATCH = free_lift(1500.0, 1000.0, 100)      # reconciles neither way
 
 ROWING_SUMMARY_7001 = {"trainingTime": 530, "totalDistance": 892.71, "calorie": 161, "totalEnergy": 29580.29,
