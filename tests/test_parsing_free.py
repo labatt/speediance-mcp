@@ -15,10 +15,13 @@ class TestFreeLift(unittest.TestCase):
         self.assertEqual(exercises[0]["weights"], [100.0, 100.0])
         self.assertEqual(exercises[0]["volume"], 2000.0)
 
-    def test_kg_account_sets_are_divided_by_2_2(self):
+    def test_kg_account_weights_are_not_divided(self):
+        # Only the set capacity is x2.2 on a kg account; the set weight is already in kg.
         self.assertEqual(parsing.free_scale(fx.FREE_KG_SCALED)[0], 2.2)
-        exercises, _ = parsing.parse_free_exercises(fx.FREE_KG_SCALED)
-        self.assertEqual(exercises[0]["weights"], [45.5, 45.5])
+        exercises, warnings = parsing.parse_free_exercises(fx.FREE_KG_SCALED)
+        self.assertEqual(warnings, [])
+        self.assertEqual(exercises[0]["weights"], [45.0, 45.0])
+        self.assertEqual(exercises[0]["volume"], fx.FREE_KG_SCALED["totalCapacity"])
 
     def test_unreconciled_sessions_keep_raw_values_and_warn(self):
         exercises, warnings = parsing.parse_free_exercises(fx.FREE_MISMATCH)
