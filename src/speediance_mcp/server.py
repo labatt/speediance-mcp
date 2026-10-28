@@ -77,7 +77,7 @@ TOOLS = (
     coaching.get_muscle_balance,
     exercises.list_exercises, exercises.get_exercise, exercises.mark_exercise, exercises.list_accessories,
     exercises.get_exercise_history,
-    workouts.list_my_workouts, workouts.get_workout, workouts.create_workout, workouts.update_workout,
+    workouts.list_my_workouts, workouts.get_workout, workouts.get_planned_session, workouts.create_workout, workouts.update_workout,
     workouts.delete_workout,
     calendar.schedule_workout, calendar.unschedule_workout, calendar.browse_programs,
     memory_tools.get_preferences, memory_tools.set_preferences, memory_tools.remember_fact, memory_tools.forget_fact,

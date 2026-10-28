@@ -3,8 +3,11 @@ from __future__ import annotations
 from mcp.server.mcpserver.exceptions import ToolError
 
 from ..library import accessory_names, summarize_exercise, variant_id
+from ..speediance.api import PlanNotFound
 from ..speediance.client import Rejected
-from ..speediance.writes import build_template, read_template, sets_for_kind, validate_sets, verify
+from ..speediance.routes import AI_PLAN_ROUTE
+from ..speediance.writes import (build_template, read_course, read_template, sets_for_kind, validate_sets,
+                                 verify)
 from ._common import resolve_group
 
 MAX_NAME = 60
@@ -28,7 +31,8 @@ def _row_by_code(app, handle) -> dict:
     for row in app.api.templates():
         if row.get("code") == key or str(row.get("id")) == key:
             return row
-    raise ToolError(f"No workout template {key!r}. Call list_my_workouts for current codes.")
+    raise ToolError(f"No workout template {key!r}. Call list_my_workouts for current codes. A calendar entry "
+                    "with a courseId is a course, not a template: open it with get_planned_session.")
 
 
 def _by_variant(app) -> dict:
@@ -66,6 +70,33 @@ def get_workout(app, code: str) -> dict:
             exercise["kind"] = summarize_exercise(raw)["kind"]
             exercise["sets"] = sets_for_kind(exercise["kind"], exercise["sets"])
     return {**workout, "displayUnit": app.api.unit}
+
+
+def get_planned_session(app, course_id: int, type: int = 0) -> dict:
+    """What a booked official course or AI (Goal-Focused) session will ask for, before it's done:
+    exercises in order, each set's reps (or seconds), weight, side and rest, like get_workout.
+    Pass the calendar entry's `courseId` and `type`; get_calendar's openWith gives both. Weights
+    are in displayUnit and are the course's own prescribed loads. Once the session is done, use
+    get_session_detail with its trainingId for what was actually lifted."""
+    try:
+        route, detail = app.api.course_plan(course_id, type)
+    except PlanNotFound:
+        raise ToolError(f"Speediance has no course or AI plan with id {course_id}. Use the courseId from a "
+                        "get_calendar entry. AI plans may be unavailable if the Speediance subscription has "
+                        "lapsed.") from None
+    plan = read_course(detail)
+    by_group = {raw.get("id"): raw for raw in app.api.library()}
+    for exercise in plan["exercises"]:
+        raw = by_group.get(exercise["groupId"])
+        if raw:
+            exercise["kind"] = summarize_exercise(raw)["kind"]
+            exercise["sets"] = sets_for_kind(exercise["kind"], exercise["sets"])
+    out = {**plan, "planType": "ai" if route == AI_PLAN_ROUTE else "course", "displayUnit": app.api.unit}
+    if route == AI_PLAN_ROUTE:
+        # Only the course route has been checked against a live payload (see routes.py).
+        out["note"] = ("AI plans are read the same way as official courses, but no AI plan has been checked "
+                       "against Speediance yet. If anything here looks wrong, tell the user rather than guess.")
+    return out
 
 
 def _as_int(value, field: str, number: int) -> int:

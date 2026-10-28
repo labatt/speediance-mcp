@@ -171,27 +171,58 @@ def build_template(name: str, specs: list[dict], *, unit: str, device_type: int,
     return body
 
 
+def _read_sets(action: dict) -> list[dict]:
+    """One movement's per-set CSV columns, zipped into sets. Templates and courses share them."""
+    counts, weights = _csv(action.get("setsAndReps")), _csv(action.get("weights"))
+    levels, sides = _csv(action.get("level")), _csv(action.get("leftRight"))
+    rests = _csv(action.get("breakTime2") or action.get("breakTime"))
+    sets = []
+    for i, count in enumerate(counts):
+        side = _int(sides[i]) if i < len(sides) else 0
+        sets.append({"count": _int(count),
+                     "weight": _float(weights[i]) if i < len(weights) else None,
+                     "level": _int(levels[i]) if i < len(levels) else 0,
+                     "side": side if side in (1, 2) else None,
+                     "rest": _int(rests[i], None) if i < len(rests) else None})
+    return sets
+
+
 def read_template(detail: dict) -> dict:
     actions = sorted((detail or {}).get("actionLibraryList") or [], key=lambda a: a.get("sort") or 0)
     exercises = []
     for action in actions:
-        counts, weights = _csv(action.get("setsAndReps")), _csv(action.get("weights"))
-        levels, sides = _csv(action.get("level")), _csv(action.get("leftRight"))
-        rests = _csv(action.get("breakTime2") or action.get("breakTime"))
-        sets = []
-        for i, count in enumerate(counts):
-            side = _int(sides[i]) if i < len(sides) else 0
-            sets.append({"count": _int(count),
-                         "weight": _float(weights[i]) if i < len(weights) else None,
-                         "level": _int(levels[i]) if i < len(levels) else 0,
-                         "side": side if side in (1, 2) else None,
-                         "rest": _int(rests[i], None) if i < len(rests) else None})
         exercises.append({"name": action.get("title") or "", "actionLibraryId": action.get("actionLibraryId"),
-                          "presetId": action.get("templatePresetId"), "sets": sets,
+                          "presetId": action.get("templatePresetId"), "sets": _read_sets(action),
                           "sportMode": action.get("sportMode"),
                           "selectCompletionMethod": action.get("selectCompletionMethod")})
     return {"id": detail.get("id"), "code": detail.get("code"), "name": detail.get("name"),
             "durationMinute": detail.get("durationMinute"), "exercises": exercises}
+
+
+def read_course(detail: dict) -> dict:
+    """A booked course's prescription (`v2/course/info`), in read_template's shape.
+
+    Verified live 2026-09-30 on an official course. It differs from a template in these ways:
+    - Movements have no `sort` and no `actionLibraryId`. They come in list order. Their `id`
+      belongs to the course and is not a library variant id, so the movement is named by
+      `groupId`, the library group id.
+    - `weights` are in the same scale as get_session_detail's logs. A completed course's plan
+      prescribed 73 and 26 where the session logged 75 and 26 kg, so it isn't x2.2. `weights`
+      always equalled `myRecommendedWeight2`. `recommendedWeight` is a different, single figure
+      (54 against sets of 47) whose meaning isn't known, so it is left out.
+    - `countType` was 2 on every movement, timed stretches included, so it can't tell reps from
+      seconds. The library's kind decides that, as it does for templates.
+    - `counterweight2` and `restMode` are filled in, but what they mean hasn't been worked out.
+    """
+    exercises = []
+    for action in (detail or {}).get("actionLibraryList") or []:
+        exercises.append({"name": action.get("title") or "", "groupId": action.get("groupId"),
+                          "sets": _read_sets(action), "sportMode": action.get("sportMode"),
+                          "selectCompletionMethod": action.get("selectCompletionMethod")})
+    return {"courseId": detail.get("id"), "name": detail.get("courseTitle"),
+            "description": detail.get("courseContext"), "category": detail.get("categoryName"),
+            "difficulty": detail.get("difficultyId"), "durationMinute": detail.get("durationMinute"),
+            "isAICourse": detail.get("isAICourse"), "exercises": exercises}
 
 
 def sets_for_kind(kind: str, stored_sets: list[dict], default_rest: int = 60) -> list[dict]:

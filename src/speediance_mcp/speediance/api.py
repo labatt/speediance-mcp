@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .client import NotFound, Rejected, SpeedianceClient, SpeedianceError, WrongNamespace
-from .routes import FREE_INTERVALS_ROUTE, SUMMARY_ROUTES, detail_path, routes_to_try
+from .routes import (FREE_INTERVALS_ROUTE, PLAN_MISSING_CODE, SUMMARY_ROUTES, detail_path, plan_routes,
+                     routes_to_try)
 
 HISTORY_START = "2020-01-01"
 HISTORY_TTL = 600.0
@@ -21,6 +22,10 @@ STATS_PAGE = 50
 
 class SessionNotFound(SpeedianceError):
     """The training id is not in this account's history."""
+
+
+class PlanNotFound(SpeedianceError):
+    """Neither plan route serves this course id."""
 
 
 class SpeedianceAPI:
@@ -149,6 +154,26 @@ class SpeedianceAPI:
 
     def delete_template(self, template_id) -> None:
         self.client.delete("/api/app/customTrainingTemplate", params={"ids": int(template_id)})
+
+    def course_plan(self, course_id, calendar_type=0) -> tuple[str, dict]:
+        """(route, payload) for a booked course or AI session, keyed by its calendar `courseId`.
+
+        Tries the route that fits the calendar type first. On code 100026 it tries the other one:
+        that code only means "not on this route" (see routes.PLAN_MISSING_CODE).
+        """
+        for route in plan_routes(calendar_type):
+            path = route.format(cid=int(course_id))
+            try:
+                data = self.client.get(path, params={"weightConfig": 1})
+            except Rejected as exc:
+                if exc.code == PLAN_MISSING_CODE:
+                    continue
+                raise
+            except (WrongNamespace, NotFound):
+                continue
+            if isinstance(data, dict) and data:
+                return route, data
+        raise PlanNotFound(f"No course or AI plan with id {int(course_id)}.")
 
     def reserve(self, date: str, code: str, status: int) -> Any:
         return self.client.post("/api/app/templateReservation", {
