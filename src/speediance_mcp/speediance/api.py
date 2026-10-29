@@ -169,7 +169,8 @@ class SpeedianceAPI:
 
     def library(self, force: bool = False) -> list[dict]:
         """The raw exercise catalog, cached on disk for 24 hours (~1,000 movements)."""
-        path = self.cache_dir / f"library-{self.client.region}-{self.device_type}.json"
+        # Names are in the client's language, so a language change must not reuse the old cache.
+        path = self.cache_dir / f"library-{self.client.region}-{self.device_type}-{self.client.language}.json"
         if not force:
             cached = self._cached_library(path)
             if cached is not None:

@@ -136,6 +136,11 @@ aren't documented by Speediance), and a future Speediance update could change th
 Use `--region EU` if your account is on Speediance's EU servers, and `--device-type 2` for a Gym Pal.
 Login also downloads the exercise library (about 30 seconds, once a day at most).
 
+Exercise and workout names come back in your system locale's language when Speediance carries it
+(English, German, French, Spanish, Italian or Korean), and in English otherwise. Pick one explicitly
+with `--language de` at login, or set `SPEEDIANCE_LANGUAGE`. Without any language the Speediance API
+answers in Chinese, which is why this is always sent.
+
 `speediance-mcp status` shows who you're signed in as; `speediance-mcp logout` signs out and deletes the
 stored credentials.
 
