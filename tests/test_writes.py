@@ -22,11 +22,37 @@ class TestBuild(unittest.TestCase):
         self.assertEqual(body["totalCapacity"], 800.0)
         self.assertNotIn("id", body)
 
-    def test_kg_account_uses_preset_1_and_scales_total(self):
+    def test_kg_account_uses_training_preset_in_display_units(self):
         body = writes.build_template("Pull", [ROW], unit="kg", device_type=1, template_id=9001)
-        self.assertEqual(body["actionLibraryList"][0]["templatePresetId"], 1)
-        self.assertEqual(body["totalCapacity"], 1760.0)
+        action = body["actionLibraryList"][0]
+        self.assertEqual((action["templatePresetId"], action["weights"]), (-1, "50.0,50.0"))
+        self.assertEqual((action["capacity"], body["totalCapacity"]), (800.0, 800.0))
         self.assertEqual(body["id"], 9001)
+
+    def test_set_modes_write_the_sport_mode_csv(self):
+        sets = writes.validate_sets("reps", [{"reps": 8, "weight": 20}, {"reps": 8, "weight": 20, "mode": "chain"},
+                                             {"reps": 8, "weight": 20, "mode": "Eccentric"}])
+        action = writes.build_template("x", [dict(ROW, sets=sets)], unit="kg", device_type=1)["actionLibraryList"][0]
+        self.assertEqual(action["sportMode"], "1,2,3")
+
+
+class TestWireBody(unittest.TestCase):
+    def test_kg_scales_training_preset_loads_and_total(self):
+        body = writes.build_template("Pull", [ROW], unit="kg", device_type=1)
+        wire = writes.wire_body(body, "kg")
+        action = wire["actionLibraryList"][0]
+        self.assertEqual((action["weights"], action["capacity"], wire["totalCapacity"]), ("110.00,110.00", 1760.0, 1760.0))
+        self.assertEqual(body["actionLibraryList"][0]["weights"], "50.0,50.0")  # the built body is untouched
+
+    def test_kg_positive_preset_goes_verbatim_but_total_still_scales(self):
+        body = writes.build_template("Pull", [ROW], unit="kg", device_type=1)
+        body["actionLibraryList"][0]["templatePresetId"] = 3
+        wire = writes.wire_body(body, "kg")
+        self.assertEqual((wire["actionLibraryList"][0]["weights"], wire["totalCapacity"]), ("50.0,50.0", 1760.0))
+
+    def test_lb_goes_as_built(self):
+        body = writes.build_template("Pull", [ROW], unit="lb", device_type=1)
+        self.assertEqual(writes.wire_body(body, "lb"), body)
 
     def test_unilateral_sides_alternate_but_explicit_sides_win(self):
         action = writes.build_template("x", [ONE_ARM], unit="lb", device_type=1)["actionLibraryList"][0]
@@ -43,9 +69,26 @@ class TestBuild(unittest.TestCase):
 class TestValidate(unittest.TestCase):
     def test_valid(self):
         self.assertEqual(writes.validate_sets("reps", [{"reps": 8, "weight": 50}]),
-                         [{"reps": 8, "weight": 50.0, "side": None, "rest": 60}])
+                         [{"reps": 8, "weight": 50.0, "side": None, "rest": 60, "mode": 1}])
         self.assertEqual(writes.validate_sets("timed", [{"seconds": 45, "rest_seconds": 30}]),
-                         [{"seconds": 45, "level": None, "side": None, "rest": 30}])
+                         [{"seconds": 45, "level": None, "side": None, "rest": 30, "mode": 1}])
+
+    def test_kg_grid_only_when_asked(self):
+        with self.assertRaises(ValueError):
+            writes.validate_sets("reps", [{"reps": 8, "weight": 12.5}], unit="kg")
+        self.assertEqual(writes.validate_sets("reps", [{"reps": 8, "weight": 12}], unit="kg")[0]["weight"], 12.0)
+        # A rebuild of stored loads passes no unit, so a stored 8.5 goes back as it was.
+        self.assertEqual(writes.validate_sets("reps", [{"reps": 8, "weight": 8.5}])[0]["weight"], 8.5)
+
+    def test_modes(self):
+        got = [s["mode"] for s in writes.validate_sets("reps", [
+            {"reps": 8, "weight": 5, "mode": m} for m in ("standard", "chain", "eccentric", 4)])]
+        self.assertEqual(got, [1, 2, 3, 4])  # an unknown stored code round-trips
+        for bad in ("negative", 0, True, 2.5, ""):
+            with self.subTest(mode=bad), self.assertRaises(ValueError):
+                writes.validate_sets("reps", [{"reps": 8, "weight": 5, "mode": bad}])
+        self.assertEqual([writes.mode_name(c) for c in ("1", 2, "3", "7", None)],
+                         ["standard", "chain", "eccentric", 7, "standard"])
 
     def test_invalid(self):
         for kind, sets in (("reps", []), ("reps", [{"reps": 0, "weight": 5}]), ("reps", [{"reps": 5, "weight": -1}]),
@@ -125,9 +168,10 @@ class TestReadAndVerify(unittest.TestCase):
             {"sort": 1, "title": "Row", "actionLibraryId": 3210, "templatePresetId": -1, "setsAndReps": "12,10",
              "weights": "30.0,40.0", "level": "0,0", "leftRight": "0,0", "breakTime2": "60,90"}]}
         exercise = writes.read_template(detail)["exercises"][0]
-        self.assertEqual(exercise["sets"][1], {"count": 10, "weight": 40.0, "level": 0, "side": None, "rest": 90})
+        self.assertEqual(exercise["sets"][1], {"count": 10, "weight": 40.0, "level": 0, "side": None, "rest": 90,
+                                               "mode": 1})
         self.assertEqual(writes.sets_for_kind("reps", exercise["sets"])[0],
-                         {"reps": 12, "weight": 30.0, "side": None, "rest": 60})
+                         {"reps": 12, "weight": 30.0, "side": None, "rest": 60, "mode": 1})
 
     def test_read_template_preserves_sport_mode_and_completion_method(self):
         detail = {"id": 1, "code": "c", "name": "n", "durationMinute": 20, "actionLibraryList": [
@@ -135,16 +179,16 @@ class TestReadAndVerify(unittest.TestCase):
              "weights": "30.0,40.0", "level": "0,0", "leftRight": "0,0", "breakTime2": "60,90",
              "sportMode": "3,3", "selectCompletionMethod": "4,4"}]}
         exercise = writes.read_template(detail)["exercises"][0]
-        self.assertEqual(exercise["sportMode"], "3,3")
+        self.assertEqual([s["mode"] for s in exercise["sets"]], [3, 3])
         self.assertEqual(exercise["selectCompletionMethod"], "4,4")
 
-    def test_build_template_preserves_matching_sport_mode(self):
-        spec = dict(ROW, sportMode="3,3", selectCompletionMethod="4,4")
+    def test_build_template_preserves_matching_completion_method(self):
+        spec = dict(ROW, selectCompletionMethod="4,4")
         action = writes.build_template("x", [spec], unit="lb", device_type=1)["actionLibraryList"][0]
-        self.assertEqual((action["sportMode"], action["selectCompletionMethod"]), ("3,3", "4,4"))
+        self.assertEqual(action["selectCompletionMethod"], "4,4")
 
-    def test_build_template_defaults_sport_mode_when_count_mismatches(self):
-        spec = dict(ROW, sportMode="3", selectCompletionMethod="4")  # only 1 entry, ROW has 2 sets
+    def test_build_template_defaults_completion_method_when_count_mismatches(self):
+        spec = dict(ROW, selectCompletionMethod="4")  # only 1 entry, ROW has 2 sets
         action = writes.build_template("x", [spec], unit="lb", device_type=1)["actionLibraryList"][0]
         self.assertEqual((action["sportMode"], action["selectCompletionMethod"]), ("1,1", "1,1"))
 
@@ -228,6 +272,14 @@ class TestVerifyStricter(unittest.TestCase):
             "weights": a["weights"], "level": "", "leftRight": a["leftRight"], "breakTime2": a["breakTime2"]}]}
         problems = writes.verify(body, stored)
         self.assertTrue(any("level" in p for p in problems))
+
+    def test_dropped_set_mode_is_caught(self):
+        sets = writes.validate_sets("reps", [{"reps": 8, "weight": 20, "mode": "eccentric"}])
+        body = writes.build_template("x", [dict(ROW, sets=sets)], unit="kg", device_type=1)
+        stored = {"actionLibraryList": [{**body["actionLibraryList"][0], "sportMode": "1"}]}
+        self.assertTrue(any("mode" in p for p in writes.verify(body, stored)))
+        stored["actionLibraryList"][0]["sportMode"] = "3"
+        self.assertEqual(writes.verify(body, stored), [])
 
     def test_dropped_sides_is_caught(self):
         body = writes.build_template("x", [ONE_ARM], unit="lb", device_type=1)

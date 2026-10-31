@@ -341,7 +341,8 @@ The other 13 are new: `get_heart_rate`, `get_training_stats`, `compare_sessions`
 `get_muscle_balance`, `log_off_machine_workout`, `get_off_machine_log` and `delete_off_machine_day`.
 `set_preferences`,
 `suggest_load` and `create_workout` take simpler inputs: typed preference fields instead of one JSON blob, and
-no Dynamic Weight modes or RM presets yet. `remember_fact` and `forget_fact` differ from GM Manager's (see
+no RM presets yet (per-set standard, chain and eccentric modes are supported; the overload is dialled in on
+the machine). `remember_fact` and `forget_fact` differ from GM Manager's (see
 below).
 
 **Coaching facts** are curated rather than free text. Each fact has a `kind` — a `constraint` (with `severity`
