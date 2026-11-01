@@ -6,7 +6,9 @@ without notice.
 
 from __future__ import annotations
 
+import locale
 import os
+import re
 import threading
 import time
 from datetime import datetime, timedelta
@@ -81,6 +83,28 @@ class Rejected(SpeedianceError):
         self.api_message = message
 
 
+# Exercise and workout names come back in the language Accept-Language names. The server only
+# honours a bare code: "en-GB", a language it doesn't carry ("ja") and no header at all all
+# answer in Chinese (verified live 2026-10-04). So send only codes known to work, else English.
+SUPPORTED_LANGUAGES = ("en", "de", "fr", "es", "it", "ko")
+DEFAULT_LANGUAGE = "en"
+
+
+def resolve_language(preferred: str | None = None) -> str:
+    """The language to ask Speediance for: the account's stored choice, else $SPEEDIANCE_LANGUAGE,
+    else the system locale; any language Speediance doesn't carry becomes English."""
+    try:
+        system = locale.getlocale()[0]
+    except ValueError:
+        system = None
+    for raw in (preferred, os.environ.get("SPEEDIANCE_LANGUAGE"), os.environ.get("LC_ALL"),
+                os.environ.get("LC_MESSAGES"), os.environ.get("LANG"), system):
+        code = re.split(r"[-_.@]", (raw or "").strip(), maxsplit=1)[0].lower()
+        if code and code not in ("c", "posix"):
+            return code if code in SUPPORTED_LANGUAGES else DEFAULT_LANGUAGE
+    return DEFAULT_LANGUAGE
+
+
 def _tz_headers() -> dict[str, str]:
     now = datetime.now().astimezone()
     offset = now.utcoffset() or timedelta(0)
@@ -116,6 +140,11 @@ class SpeedianceClient:
         self._on_credentials = on_credentials
         self._reload_credentials = reload_credentials
 
+    @property
+    def language(self) -> str:
+        """The language Speediance answers this client in (see resolve_language)."""
+        return resolve_language(self.creds.language if self.creds else None)
+
     def _throttle(self) -> None:
         with self._throttle_lock:
             now = self._clock()
@@ -135,7 +164,7 @@ class SpeedianceClient:
             "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
             "App_type": app_type,
-            "Accept-Language": "en",
+            "Accept-Language": self.language,
             **_tz_headers(),
         }
         if auth and self.creds:
@@ -221,7 +250,8 @@ class SpeedianceClient:
             return True
 
     def login(self, email: str, password: str, *, remember: bool = False, device_type: int = 1,
-              client_type: str | None = None, unit: str | None = None) -> Credentials:
+              client_type: str | None = None, unit: str | None = None,
+              language: str | None = None) -> Credentials:
         client_type = client_type or DEFAULT_CLIENT_TYPE
         if client_type not in CLIENT_TYPES:
             raise ValueError(f"client_type must be one of {', '.join(CLIENT_TYPES)}")
@@ -256,6 +286,7 @@ class SpeedianceClient:
             email=email, token=data["token"], user_id=str(data["appUserId"]),
             unit=unit_value, region=self.region,
             device_type=device_type, password=password if remember else None, client_type=client_type,
+            language=language or (self.creds.language if self.creds else None),
         )
         if self._on_credentials:
             self._on_credentials(self.creds)

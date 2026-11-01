@@ -22,6 +22,7 @@ class Credentials:
     device_type: int = 1      # 1 = Gym Monster, 2 = Gym Pal
     password: str | None = None  # absent when the user signed in with --no-remember
     client_type: str = "bike"   # which Speediance session slot logins use; see client.CLIENT_TYPES
+    language: str | None = None  # names come back in this language; None = $SPEEDIANCE_LANGUAGE or the locale
 
 
 def credentials_path(home: Path | None = None) -> Path:

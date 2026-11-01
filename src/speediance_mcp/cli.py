@@ -10,7 +10,8 @@ from . import __version__
 from .config import clear_credentials, load_credentials, save_credentials
 from .paths import data_dir
 from .speediance.api import SpeedianceAPI
-from .speediance.client import CLIENT_TYPES, DEFAULT_CLIENT_TYPE, SpeedianceClient, SpeedianceError
+from .speediance.client import (CLIENT_TYPES, DEFAULT_CLIENT_TYPE, SUPPORTED_LANGUAGES, SpeedianceClient,
+                                SpeedianceError, resolve_language)
 
 
 def _make_client(creds, region):
@@ -40,6 +41,8 @@ def _parser() -> argparse.ArgumentParser:
     login.add_argument("--unit", choices=["lb", "kg"],
                        help="Your account's weight unit, as the Speediance app shows it. Needed the first time you "
                             "sign in with a client type other than phone, which don't report it.")
+    login.add_argument("--language", choices=SUPPORTED_LANGUAGES,
+                       help="Language for exercise and workout names (default: your system locale, else en)")
     login.add_argument("--client-type", choices=list(CLIENT_TYPES), default=DEFAULT_CLIENT_TYPE,
                        help="Which Speediance session slot to sign in with (default: bike). Speediance allows one "
                             "session per slot, so pick one no device of yours uses — see the README.")
@@ -104,17 +107,19 @@ def _login(args) -> int:
     known = load_credentials()
     remember = args.remember
     client = _make_client(None, args.region)
-    unit = args.unit or (known.unit if known and known.email.lower() == email.lower() else None)
+    same_account = bool(known and known.email.lower() == email.lower())
+    unit = args.unit or (known.unit if same_account else None)
+    language = args.language or (known.language if same_account else None)
     try:
         creds = client.login(email, password, remember=remember, device_type=args.device_type,
-                             client_type=args.client_type, unit=unit)
+                             client_type=args.client_type, unit=unit, language=language)
     except SpeedianceError as exc:
         client.close()
         print(f"Login failed: {exc}", file=sys.stderr)
         return 1
     path = save_credentials(creds)
     print(f"Signed in as {creds.email} (display unit: {creds.unit}, region: {creds.region}, "
-          f"client type: {creds.client_type}). "
+          f"client type: {creds.client_type}, language: {resolve_language(creds.language)}). "
           f"Credentials saved to {path}.")
     if remember:
         print("Password stored so expired sessions renew automatically (use --no-remember to store only the token).")
@@ -168,5 +173,6 @@ def _status() -> int:
         return 1
     print("\n".join([f"Account: {creds.email}", f"Region: {creds.region}", f"Display unit: {creds.unit}",
                      f"Device type: {creds.device_type}", f"Client type: {creds.client_type}",
+                     f"Language: {resolve_language(creds.language)}",
                      f"Password remembered: {'yes' if creds.password else 'no'}", f"Data directory: {home}"]))
     return 0

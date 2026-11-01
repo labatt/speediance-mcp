@@ -102,7 +102,7 @@ class TestRemote(RemoteBase):
         self.assertEqual(resp.status_code, 401)
         self.assertIn("resource_metadata", resp.headers["www-authenticate"])
 
-    def test_full_connector_flow_lists_the_32_tools(self):
+    def test_full_connector_flow_lists_the_35_tools(self):
         token = self.connect()
         self.assertEqual(self.verified, [CREDS.email])
         init = self.mcp(token["access_token"], "initialize",
@@ -112,7 +112,7 @@ class TestRemote(RemoteBase):
         session = init.headers.get("mcp-session-id")
         self.mcp(token["access_token"], "notifications/initialized", session=session, id_=None)
         tools = sse_json(self.mcp(token["access_token"], "tools/list", session=session, id_=2))
-        self.assertEqual(len(tools["result"]["tools"]), 32)
+        self.assertEqual(len(tools["result"]["tools"]), 35)
 
     def test_refresh_then_replay(self):
         token = self.connect()
