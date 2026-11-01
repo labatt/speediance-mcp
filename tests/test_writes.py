@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import unittest
 
 from speediance_mcp.speediance import writes
@@ -17,16 +18,26 @@ class TestBuild(unittest.TestCase):
         body = writes.build_template("Pull", [ROW], unit="lb", device_type=1)
         action = body["actionLibraryList"][0]
         self.assertEqual((action["groupId"], action["actionLibraryId"], action["templatePresetId"]), (321, 3210, -1))
-        self.assertEqual((action["setsAndReps"], action["weights"]), ("8,8", "50.0,50.0"))
+        self.assertEqual((action["setsAndReps"], action["weights"]), ("8,8", "50,50"))
         self.assertEqual((action["counterweight2"], action["capacity"]), ("", 800.0))
         self.assertEqual(body["totalCapacity"], 800.0)
         self.assertNotIn("id", body)
 
-    def test_kg_account_uses_preset_1_and_scales_total(self):
+    def test_kg_account_is_custom_and_sends_lb(self):
+        # Preset 1 is Speediance's "Gain Muscle" %1RM preset: the machine ignores its weights.
+        # With -1 the server reads loads as lb and converts them to the account's kg.
         body = writes.build_template("Pull", [ROW], unit="kg", device_type=1, template_id=9001)
-        self.assertEqual(body["actionLibraryList"][0]["templatePresetId"], 1)
+        action = body["actionLibraryList"][0]
+        self.assertEqual(action["templatePresetId"], -1)
+        self.assertEqual((action["weights"], action["capacity"]), ("110,110", 1760.0))
         self.assertEqual(body["totalCapacity"], 1760.0)
         self.assertEqual(body["id"], 9001)
+
+    def test_kg_half_kilos_survive_the_lb_encoding(self):
+        spec = dict(ROW, sets=[{"reps": 10, "weight": 23.5, "side": None, "rest": 60},
+                               {"reps": 10, "weight": 9.3, "side": None, "rest": 60}])
+        action = writes.build_template("x", [spec], unit="kg", device_type=1)["actionLibraryList"][0]
+        self.assertEqual(action["weights"], "51.7,20.46")
 
     def test_unilateral_sides_alternate_but_explicit_sides_win(self):
         action = writes.build_template("x", [ONE_ARM], unit="lb", device_type=1)["actionLibraryList"][0]
@@ -106,19 +117,44 @@ class TestReadAndVerify(unittest.TestCase):
             "level": a["level"], "leftRight": a["leftRight"], "breakTime2": a["breakTime2"]}
             for i, a in enumerate(body["actionLibraryList"])]}
 
+    HALF_KILO_ROW = dict(ROW, variantId=3211, sets=[{"reps": 10, "weight": 23.5, "side": None, "rest": 60}] * 2)
+
+    def kg_stored(self, body, extra_divisor=1.0):
+        """What a kg account's server keeps for preset -1: the lb loads / 2.2, cut to whole kg."""
+        stored = self.stored(body)
+        for a in stored["actionLibraryList"]:
+            a["weights"] = ",".join(str(math.floor(float(w) / 2.2 / extra_divisor + 1e-9))
+                                    for w in a["weights"].split(","))
+        return stored
+
     def test_verified_round_trip(self):
         body = writes.build_template("x", [ROW, ONE_ARM, VITA], unit="lb", device_type=1)
-        self.assertEqual(writes.verify(body, self.stored(body)), [])
+        self.assertEqual(writes.verify(body, self.stored(body), unit="lb"), [])
 
     def test_shrunken_weights_are_caught(self):
         body = writes.build_template("x", [ROW], unit="lb", device_type=1)
-        problems = writes.verify(body, self.stored(body, weight_divisor=2.2))
+        problems = writes.verify(body, self.stored(body, weight_divisor=2.2), unit="lb")
         self.assertEqual(len(problems), 1)
         self.assertIn("weights", problems[0])
 
+    def test_kg_round_trip_allows_whole_kg_truncation(self):
+        body = writes.build_template("x", [self.HALF_KILO_ROW], unit="kg", device_type=1)
+        self.assertEqual(writes.verify(body, self.kg_stored(body), unit="kg"), [])
+
+    def test_kg_load_saved_in_the_wrong_unit_is_caught(self):
+        body = writes.build_template("x", [ROW], unit="kg", device_type=1)
+        problems = writes.verify(body, self.kg_stored(body, extra_divisor=2.2), unit="kg")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("weights sent 50,50", problems[0])
+
+    def test_rounded_loads_name_the_truncated_movement(self):
+        body = writes.build_template("x", [ROW, self.HALF_KILO_ROW], unit="kg", device_type=1)
+        self.assertEqual(writes.rounded_loads(body, self.kg_stored(body), unit="kg"),
+                         ["ex 2: asked 23.5,23.5 kg, saved 23,23 kg"])
+
     def test_count_mismatch(self):
         body = writes.build_template("x", [ROW], unit="lb", device_type=1)
-        self.assertIn("stored 0", writes.verify(body, {"actionLibraryList": []})[0])
+        self.assertIn("stored 0", writes.verify(body, {"actionLibraryList": []}, unit="lb")[0])
 
     def test_read_template_and_sets_for_kind(self):
         detail = {"id": 1, "code": "c", "name": "n", "durationMinute": 20, "actionLibraryList": [
@@ -205,7 +241,7 @@ class TestVerifyStricter(unittest.TestCase):
             "sort": 1, "title": "ex 1", "actionLibraryId": 9999, "templatePresetId": a["templatePresetId"],
             "setsAndReps": a["setsAndReps"], "weights": a["weights"], "level": a["level"],
             "leftRight": a["leftRight"], "breakTime2": a["breakTime2"]}]}
-        problems = writes.verify(body, stored)
+        problems = writes.verify(body, stored, unit="lb")
         self.assertTrue(any("9999" in p for p in problems))
 
     def test_rest_change_is_caught(self):
@@ -216,7 +252,7 @@ class TestVerifyStricter(unittest.TestCase):
             "templatePresetId": a["templatePresetId"], "setsAndReps": a["setsAndReps"],
             "weights": a["weights"], "level": a["level"], "leftRight": a["leftRight"],
             "breakTime2": "90,90"}]}
-        problems = writes.verify(body, stored)
+        problems = writes.verify(body, stored, unit="lb")
         self.assertTrue(any("rest" in p for p in problems))
 
     def test_dropped_vita_level_is_caught(self):
@@ -226,7 +262,7 @@ class TestVerifyStricter(unittest.TestCase):
             "sort": 1, "title": "ex 1", "actionLibraryId": a["actionLibraryId"],
             "templatePresetId": a["templatePresetId"], "setsAndReps": a["setsAndReps"],
             "weights": a["weights"], "level": "", "leftRight": a["leftRight"], "breakTime2": a["breakTime2"]}]}
-        problems = writes.verify(body, stored)
+        problems = writes.verify(body, stored, unit="lb")
         self.assertTrue(any("level" in p for p in problems))
 
     def test_dropped_sides_is_caught(self):
@@ -236,7 +272,7 @@ class TestVerifyStricter(unittest.TestCase):
             "sort": 1, "title": "ex 1", "actionLibraryId": a["actionLibraryId"],
             "templatePresetId": a["templatePresetId"], "setsAndReps": a["setsAndReps"],
             "weights": a["weights"], "level": a["level"], "leftRight": "", "breakTime2": a["breakTime2"]}]}
-        problems = writes.verify(body, stored)
+        problems = writes.verify(body, stored, unit="lb")
         self.assertTrue(any("side" in p for p in problems))
 
     def test_preset_id_change_is_caught_when_stored_field_present(self):
@@ -246,5 +282,5 @@ class TestVerifyStricter(unittest.TestCase):
             "sort": 1, "title": "ex 1", "actionLibraryId": a["actionLibraryId"], "templatePresetId": 1,
             "setsAndReps": a["setsAndReps"], "weights": a["weights"], "level": a["level"],
             "leftRight": a["leftRight"], "breakTime2": a["breakTime2"]}]}
-        problems = writes.verify(body, stored)
+        problems = writes.verify(body, stored, unit="lb")
         self.assertTrue(any("preset" in p for p in problems))

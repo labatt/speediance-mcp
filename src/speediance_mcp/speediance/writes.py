@@ -1,9 +1,14 @@
 """Build, read back and verify custom-template bodies (spec §8.3). Pure.
 
-Write-fault rules: totalCapacity is never null; templatePresetId and totalCapacity depend on the
-account unit (lb: -1 and the raw sum — verified live; kg: 1 and x2.2 — per pookey/speediance-cli);
+Write-fault rules: totalCapacity is never null; templatePresetId is always -1 (custom loads); with
+-1 the server reads weights/capacity/totalCapacity as lb and converts them to the account unit, so
+a kg account's loads are sent x2.2 and come back truncated to whole kg on most movements;
 unilateral movements auto-alternate sides; counterweight2 is always empty; every write is verified
 by reading the template back.
+
+templatePresetId 1 is NOT an explicit-load marker: it names Speediance's "Gain Muscle" preset
+(65% of 1RM), so the Gym Monster ignores the stored weights and shows 0 / its own loads, even
+though the phone app displays them (verified on a machine, kg account, 2026-10-21).
 """
 
 from __future__ import annotations
@@ -12,6 +17,10 @@ import math
 
 KG_LB_SCALE = 2.2
 MAX_WEIGHT = 1000.0
+CUSTOM_PRESET = -1
+# The server keeps whole kg for most movements, so a kg load may come back up to (not including)
+# 1 kg lighter than asked; the 2.2x shrink of a wrong unit still falls far outside this.
+KG_TRUNCATION = 1.0
 
 
 def _int(value, default=0) -> int:
@@ -136,19 +145,28 @@ def _stored_mode_csv(spec: dict, key: str, count: int) -> str:
     return ",".join("1" for _ in range(count))
 
 
+def _wire_scale(unit: str) -> float:
+    return KG_LB_SCALE if unit == "kg" else 1.0
+
+
+def _load(value: float) -> str:
+    """A load as the app sends it: '33', never '33.0'."""
+    return f"{round(value, 2):g}"
+
+
 def build_template(name: str, specs: list[dict], *, unit: str, device_type: int, template_id=None) -> dict:
-    preset = -1 if unit == "lb" else 1
+    scale = _wire_scale(unit)
     actions, total = [], 0.0
     for spec in specs:
         sets, kind = spec["sets"], spec["kind"]
         timed = kind != "reps"
-        capacity = 0.0 if timed else sum(s["reps"] * s["weight"] for s in sets)
+        capacity = 0.0 if timed else sum(s["reps"] * s["weight"] for s in sets) * scale
         total += capacity
         rests = ",".join(str(s["rest"]) for s in sets)
         actions.append({
             "groupId": int(spec["groupId"]),
             "actionLibraryId": int(spec["variantId"]),
-            "templatePresetId": preset,
+            "templatePresetId": CUSTOM_PRESET,
             "setsAndReps": ",".join(str(s["seconds"] if timed else s["reps"]) for s in sets),
             "breakTime": rests,
             "breakTime2": rests,
@@ -157,14 +175,14 @@ def build_template(name: str, specs: list[dict], *, unit: str, device_type: int,
             "selectCompletionMethod": _stored_mode_csv(spec, "selectCompletionMethod", len(sets)),
             "completionMethod": ",".join(("2" if timed else "1") for _ in sets),
             "countType": ",".join(("2" if timed else "1") for _ in sets),
-            "weights": ",".join(("0" if timed else f"{s['weight']:.1f}") for s in sets),
+            "weights": ",".join(("0" if timed else _load(s["weight"] * scale)) for s in sets),
             "counterweight2": "",
             "counterweight": "",
             "level": ",".join((str(s["level"]) if kind == "level" else "0") for s in sets),
             "capacity": round(capacity, 1),
         })
     body = {"name": name, "actionLibraryList": actions,
-            "totalCapacity": round(total * (KG_LB_SCALE if unit == "kg" else 1.0), 1),
+            "totalCapacity": round(total, 1),
             "deviceType": int(device_type), "bgColor": 0}
     if template_id is not None:
         body["id"] = int(template_id)
@@ -206,12 +224,28 @@ def sets_for_kind(kind: str, stored_sets: list[dict], default_rest: int = 60) ->
     return out
 
 
-def verify(body: dict, stored: dict | None) -> list[str]:
-    """Compare what was sent with what Speediance stored. An empty list means verified."""
+def _loads(action: dict, scale: float = 1.0) -> list[float]:
+    return [(_float(x) or 0.0) / scale for x in _csv(action.get("weights"))]
+
+
+def _load_kept(asked: float, stored: float, unit: str) -> bool:
+    slack = KG_TRUNCATION if unit == "kg" else 0.05
+    return asked - slack < stored <= asked + 0.05
+
+
+def _pairs(body: dict, stored: dict | None):
     sent = body["actionLibraryList"]
     got = sorted((stored or {}).get("actionLibraryList") or [], key=lambda a: a.get("sort") or 0)
+    return sent, got
+
+
+def verify(body: dict, stored: dict | None, *, unit: str) -> list[str]:
+    """Compare what was sent with what Speediance stored. An empty list means verified.
+    Weights are compared in the account unit, allowing for the server's whole-kg truncation."""
+    sent, got = _pairs(body, stored)
     if len(sent) != len(got):
         return [f"sent {len(sent)} exercises, Speediance stored {len(got)}"]
+    scale = _wire_scale(unit)
     problems = []
     for number, (s, g) in enumerate(zip(sent, got), 1):
         label = g.get("title") or f"exercise {number}"
@@ -219,11 +253,11 @@ def verify(body: dict, stored: dict | None) -> list[str]:
             problems.append(f"{label}: exercise sent {s['actionLibraryId']} but stored {g.get('actionLibraryId')}")
         if _csv(s["setsAndReps"]) != _csv(g.get("setsAndReps")):
             problems.append(f"{label}: reps/seconds sent {s['setsAndReps']} but stored {g.get('setsAndReps')}")
-        sent_w = [_float(x) or 0.0 for x in _csv(s["weights"])]
-        got_w = [_float(x) or 0.0 for x in _csv(g.get("weights"))]
+        sent_w, got_w = _loads(s, scale), _loads(g)
         if got_w or any(sent_w):
-            if len(sent_w) != len(got_w) or any(abs(a - b) > 0.05 for a, b in zip(sent_w, got_w)):
-                problems.append(f"{label}: weights sent {s['weights']} but stored {g.get('weights')}")
+            if len(sent_w) != len(got_w) or not all(_load_kept(a, b, unit) for a, b in zip(sent_w, got_w)):
+                asked = ",".join(_load(w) for w in sent_w)
+                problems.append(f"{label}: weights sent {asked} but stored {g.get('weights')}")
         sent_sides, got_sides = _csv(s["leftRight"]), _csv(g.get("leftRight"))
         if (got_sides or any(_int(x) for x in sent_sides)) and sent_sides != got_sides:
             problems.append(f"{label}: sides sent {s['leftRight']} but stored {g.get('leftRight')}")
@@ -237,3 +271,18 @@ def verify(body: dict, stored: dict | None) -> list[str]:
         if g.get("templatePresetId") is not None and s["templatePresetId"] != g.get("templatePresetId"):
             problems.append(f"{label}: preset sent {s['templatePresetId']} but stored {g.get('templatePresetId')}")
     return problems
+
+
+def rounded_loads(body: dict, stored: dict | None, *, unit: str) -> list[str]:
+    """Movements whose loads Speediance saved lighter than asked (its whole-kg truncation)."""
+    sent, got = _pairs(body, stored)
+    if len(sent) != len(got):
+        return []
+    scale, notes = _wire_scale(unit), []
+    for number, (s, g) in enumerate(zip(sent, got), 1):
+        sent_w, got_w = _loads(s, scale), _loads(g)
+        if len(sent_w) == len(got_w) and any(b < a - 0.05 for a, b in zip(sent_w, got_w)):
+            label = g.get("title") or f"exercise {number}"
+            notes.append(f"{label}: asked {','.join(_load(w) for w in sent_w)} {unit}, "
+                         f"saved {','.join(_load(w) for w in got_w)} {unit}")
+    return notes
