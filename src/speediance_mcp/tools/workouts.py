@@ -75,28 +75,61 @@ def _as_int(value, field: str, number: int) -> int:
         raise ToolError(f"exercises[{number}].{field} must be a whole number.") from None
 
 
+def _completion_csv(value, number: int) -> str | None:
+    """An exercise's optional `selectCompletionMethod`, as get_workout returns it: a CSV of whole
+    numbers, one per set. Anything else is refused rather than sent to Speediance."""
+    if value is None or value == "":
+        return None
+    parts = [p.strip() for p in str(value).split(",")]
+    if isinstance(value, bool) or not all(p.isdigit() for p in parts):
+        raise ToolError(f"exercises[{number}].selectCompletionMethod must be a comma-separated list of "
+                        "whole numbers, as get_workout returns it.")
+    return ",".join(parts)
+
+
 def _resolve_specs(app, exercises) -> list[dict]:
     if not isinstance(exercises, list) or not exercises:
         raise ToolError("exercises must be a non-empty list.")
     raw_by_id = {raw.get("id"): raw for raw in app.api.library()}
+    by_variant = None
     specs = []
     for number, exercise in enumerate(exercises, 1):
         if not isinstance(exercise, dict):
             raise ToolError(f"exercises[{number}] must be an object.")
         raw_group_id = exercise.get("group_id") or exercise.get("groupId") or 0
         group_id = _as_int(raw_group_id, "group_id", number)
+        # An `actionLibraryId` (as get_workout returns it) pins the exact variant, so a
+        # get_workout -> edit -> update_workout round trip keeps every movement it doesn't touch.
+        # Without it the group's first variant is used, which can differ from the one stored, and
+        # a name lookup can land on a different exercise with the same title.
+        raw_variant = exercise.get("actionLibraryId") or exercise.get("action_library_id")
+        pinned = None
+        if raw_variant:
+            pinned = _as_int(raw_variant, "actionLibraryId", number)
+            by_variant = by_variant if by_variant is not None else _by_variant(app)
+            owner = by_variant.get(pinned)
+            if owner is None:
+                raise ToolError(f"exercises[{number}].actionLibraryId {pinned} isn't in the exercise library.")
+            if group_id and group_id != owner.get("id"):
+                raise ToolError(f"exercises[{number}]: actionLibraryId {pinned} belongs to group_id "
+                                f"{owner.get('id')}, not {group_id}.")
+            group_id = owner.get("id")
         item = resolve_group(app, str(exercise.get("name") or ""), group_id)
-        vid = variant_id(raw_by_id.get(item["groupId"]) or {})
+        vid = pinned if pinned is not None else variant_id(raw_by_id.get(item["groupId"]) or {})
         if vid is None:
             raise ToolError(f"{item['name']} has no playable variant in the library.")
+        completion = _completion_csv(exercise.get("selectCompletionMethod"), number)
         raw_rest = exercise.get("rest_seconds")
         rest_seconds = 60 if raw_rest is None else _as_int(raw_rest, "rest_seconds", number)
         try:
             sets = validate_sets(item["kind"], exercise.get("sets"), rest_seconds)
         except ValueError as exc:
             raise ToolError(f"{item['name']}: {exc}.") from None
-        specs.append({"groupId": item["groupId"], "variantId": vid, "name": item["name"], "kind": item["kind"],
-                      "unilateral": item["unilateral"], "sets": sets})
+        spec = {"groupId": item["groupId"], "variantId": vid, "name": item["name"], "kind": item["kind"],
+                "unilateral": item["unilateral"], "sets": sets}
+        if completion is not None:
+            spec["selectCompletionMethod"] = completion
+        specs.append(spec)
     return specs
 
 
@@ -178,6 +211,8 @@ def create_workout(app, name: str, exercises: list[dict]) -> dict:
     {"name": "..." or "group_id": N, "sets": [...], "rest_seconds": 60}. Sets by movement kind:
     reps -> {"reps": 10, "weight": 50}; timed -> {"seconds": 45}; Vita (level) -> {"seconds": 30, "level": 12}.
     Optional per set: "side" 1=left / 2=right (unilateral moves alternate automatically), "rest".
+    Optional per exercise: "actionLibraryId" pins the exact exercise variant, and "selectCompletionMethod"
+    keeps the stored completion setting — pass both back unchanged from get_workout when editing.
     Weights are in displayUnit. The template is read back after saving; verified:false means Speediance
     stored something different — tell the user. Never program a ⊘avoided movement unless asked by name.
     The reply carries the user's hardConstraints and legacyUnreviewed facts when there are any.
@@ -203,7 +238,9 @@ def create_workout(app, name: str, exercises: list[dict]) -> dict:
 def update_workout(app, template_id: str | int, name: str | None = None, exercises: list[dict] | None = None) -> dict:
     """Edit a template in place (an edit never uses a new slot). `template_id` is its `code` (preferred)
     or numeric id. Omitted fields keep their current value; `exercises`, when given, replaces the whole
-    list (same format as create_workout) — start from get_workout. Verified by read-back.
+    list (same format as create_workout) — start from get_workout, and keep each exercise's
+    `actionLibraryId` and `selectCompletionMethod` so the movements you don't change stay exactly as
+    stored (by name alone, a movement can resolve to a different variant). Verified by read-back.
     The reply carries the user's hardConstraints and legacyUnreviewed facts when there are any.
     Re-check these against the workout before telling the user it's done."""
     row = _row_by_code(app, template_id)
