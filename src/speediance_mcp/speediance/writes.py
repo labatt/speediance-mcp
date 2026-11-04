@@ -2,8 +2,9 @@
 
 Write-fault rules: totalCapacity is never null; templatePresetId and totalCapacity depend on the
 account unit (lb: -1 and the raw sum — verified live; kg: 1 and x2.2 — per pookey/speediance-cli);
-unilateral movements auto-alternate sides; counterweight2 is always empty; every write is verified
-by reading the template back.
+unilateral movements auto-alternate sides; counterweight2 is empty on a movement we build, but an
+update carries a stored one through on every movement whose prescription it leaves unchanged
+(carry_unmodelled); every write is verified by reading the template back.
 """
 
 from __future__ import annotations
@@ -171,6 +172,53 @@ def build_template(name: str, specs: list[dict], *, unit: str, device_type: int,
     return body
 
 
+def _same_prescription(sent: dict, stored: dict) -> bool:
+    """Whether a built movement asks for exactly what the stored one does: same exercise, counts,
+    loads, sides, levels and rests."""
+    if sent["actionLibraryId"] != stored.get("actionLibraryId"):
+        return False
+    if _csv(sent["setsAndReps"]) != _csv(stored.get("setsAndReps")):
+        return False
+    sent_w = [_float(x) or 0.0 for x in _csv(sent["weights"])]
+    got_w = [_float(x) or 0.0 for x in _csv(stored.get("weights"))]
+    if len(sent_w) != len(got_w) or any(abs(a - b) > 0.05 for a, b in zip(sent_w, got_w)):
+        return False
+    for key in ("leftRight", "level", "breakTime2"):
+        if [_int(x) for x in _csv(sent[key])] != [_int(x) for x in _csv(stored.get(key))]:
+            return False
+    return True
+
+
+def carry_unmodelled(body: dict, detail: dict | None) -> list[str]:
+    """Carry a stored movement's counterweight setting into an update body. Mutates `body`.
+
+    `counterweight2` is a machine setting the tools don't model: on the templates seen live it
+    holds the `weight` of the movement's app preset (13 = Gain Muscle, preset 1; 17 = Stamina,
+    preset 3) and the stored `weights` are that preset's %1RM of the user's 1RM. A rebuilt body
+    sends it empty, which strips it. So for each built movement whose prescription is unchanged,
+    the stored `counterweight2`/`counterweight` and positive `templatePresetId` are sent back as
+    they were — verified live 2026-09-30: preset 3 + counterweight2 "17,..." + weights "33,..."
+    re-posted is stored verbatim, loads included. A movement whose sets changed still goes out
+    empty: the server resolves a sent counterweight2 into a load of its own, so keeping it could
+    override the new weights. Returns the names of movements that lost a counterweight that way.
+    """
+    stored = sorted((detail or {}).get("actionLibraryList") or [], key=lambda a: a.get("sort") or 0)
+    with_counterweight = [a for a in stored if a.get("counterweight2") or a.get("counterweight")]
+    unused = list(with_counterweight)
+    for sent in body["actionLibraryList"]:
+        match = next((a for a in unused if _same_prescription(sent, a)), None)
+        if match is None:
+            continue
+        unused.remove(match)
+        sent["counterweight2"] = match.get("counterweight2") or ""
+        sent["counterweight"] = match.get("counterweight") or ""
+        # Only positive presets are carried: every counterweighted movement seen live has one, and
+        # a positive preset stores `weights` verbatim. A non-positive one would rescale the loads.
+        if _int(match.get("templatePresetId")) > 0:
+            sent["templatePresetId"] = int(match["templatePresetId"])
+    return [a.get("title") or str(a.get("actionLibraryId")) for a in unused]
+
+
 def read_template(detail: dict) -> dict:
     actions = sorted((detail or {}).get("actionLibraryList") or [], key=lambda a: a.get("sort") or 0)
     exercises = []
@@ -234,6 +282,8 @@ def verify(body: dict, stored: dict | None) -> list[str]:
             problems.append(f"{label}: levels sent {s['level']} but stored {g.get('level')}")
         if _csv(s["breakTime2"]) != _csv(g.get("breakTime2")):
             problems.append(f"{label}: rest sent {s['breakTime2']} but stored {g.get('breakTime2')}")
+        if s.get("counterweight2") and _csv(s["counterweight2"]) != _csv(g.get("counterweight2")):
+            problems.append(f"{label}: counterweight sent {s['counterweight2']} but stored {g.get('counterweight2')}")
         if g.get("templatePresetId") is not None and s["templatePresetId"] != g.get("templatePresetId"):
             problems.append(f"{label}: preset sent {s['templatePresetId']} but stored {g.get('templatePresetId')}")
     return problems

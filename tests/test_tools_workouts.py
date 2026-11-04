@@ -36,7 +36,8 @@ class TemplateStore:
             {"sort": i + 1, "title": f"ex {i + 1}", "actionLibraryId": a["actionLibraryId"],
              "templatePresetId": a["templatePresetId"], "setsAndReps": a["setsAndReps"],
              "weights": ",".join(f"{float(w) / self.weight_divisor:.1f}" for w in a["weights"].split(",")),
-             "level": a["level"], "leftRight": a["leftRight"], "breakTime2": a["breakTime2"]}
+             "level": a["level"], "leftRight": a["leftRight"], "breakTime2": a["breakTime2"],
+             "counterweight2": a.get("counterweight2")}
             for i, a in enumerate(body["actionLibraryList"])]}
         return True
 
@@ -357,6 +358,37 @@ class TestWorkoutTools(unittest.TestCase):
         with self.assertRaises(ToolError):
             workouts.create_workout(app, "Push", exercises)
         self.assertEqual(fake.calls("POST", fx.SAVE_TEMPLATE_PATH), [])
+
+
+class TestCounterweightCarriedThroughUpdate(unittest.TestCase):
+    """An app-authored movement can carry a counterweight2 (its preset's weight setting). A rebuild
+    used to send it empty, so any update stripped it — even from movements it didn't touch."""
+
+    def store(self):
+        store = TemplateStore()
+        detail = copy.deepcopy(fx.TEMPLATE_9001)
+        detail["actionLibraryList"][0].update(templatePresetId=3, counterweight2="17,17")
+        store.details[fx.TEMPLATES[0]["code"]] = detail
+        return store
+
+    def test_untouched_movement_keeps_its_counterweight(self):
+        store = self.store()
+        app, _ = make_app(self, store.routes())
+        same = [{"name": "bent over row", "sets": [{"reps": 12, "weight": 30}, {"reps": 10, "weight": 40}]}]
+        got = workouts.update_workout(app, "a" * 24, name="Pull Day v2", exercises=same)
+        action = store.posts[0]["actionLibraryList"][0]
+        self.assertEqual((action["counterweight2"], action["templatePresetId"]), ("17,17", 3))
+        self.assertTrue(got["verified"])
+        self.assertNotIn("counterweightDropped", got)
+
+    def test_changed_movement_drops_it_and_says_so(self):
+        store = self.store()
+        app, _ = make_app(self, store.routes())
+        heavier = [{"name": "bent over row", "sets": [{"reps": 12, "weight": 35}, {"reps": 10, "weight": 40}]}]
+        got = workouts.update_workout(app, "a" * 24, exercises=heavier)
+        action = store.posts[0]["actionLibraryList"][0]
+        self.assertEqual((action["counterweight2"], action["weights"]), ("", "35.0,40.0"))
+        self.assertEqual(got["counterweightDropped"], ["Barbell Bent Over Row"])
 
 
 class TestRebuildRefusesPresetLoads(unittest.TestCase):

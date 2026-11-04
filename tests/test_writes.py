@@ -229,6 +229,12 @@ class TestVerifyStricter(unittest.TestCase):
         problems = writes.verify(body, stored)
         self.assertTrue(any("level" in p for p in problems))
 
+    def test_dropped_counterweight_is_caught(self):
+        body = writes.build_template("Pull", [ROW], unit="kg", device_type=1)
+        body["actionLibraryList"][0]["counterweight2"] = "13,13"
+        stored = {"actionLibraryList": [{**body["actionLibraryList"][0], "counterweight2": ""}]}
+        self.assertTrue(any("counterweight" in m for m in writes.verify(body, stored)))
+
     def test_dropped_sides_is_caught(self):
         body = writes.build_template("x", [ONE_ARM], unit="lb", device_type=1)
         a = body["actionLibraryList"][0]
