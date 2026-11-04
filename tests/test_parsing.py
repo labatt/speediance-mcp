@@ -23,7 +23,7 @@ class TestHelpers(unittest.TestCase):
         detail = {"weights": [48.5, 47.0], "leftWeights": [12.0], "rightWeights": [12.5]}
         # both cables carry the load on an unpinned bilateral set: max(left) + max(right).
         self.assertEqual(parsing.set_load(detail, None), 24.5)
-        self.assertEqual(parsing.set_load(detail, 1), 12.0)
+        self.assertEqual(parsing.set_load(detail, 1), 24.5)
         self.assertEqual(parsing.set_load({"weights": [30.0, 30.0]}, None), 30.0)
         self.assertIsNone(parsing.set_load({}, None))
 
@@ -38,10 +38,29 @@ class TestHelpers(unittest.TestCase):
         detail = {"leftWeights": [12.0, 14.0], "rightWeights": [10.0, 11.0, 13.0]}
         self.assertEqual(parsing.set_load(detail, None), 27.0)
 
-    def test_pinned_side_uses_only_that_sides_array(self):
-        detail = {"leftWeights": [20.0, 22.0], "rightWeights": [24.0, 26.0]}
-        self.assertEqual(parsing.set_load(detail, 1), 22.0)
-        self.assertEqual(parsing.set_load(detail, 2), 26.0)
+    def test_pinned_side_uses_only_that_sides_array_when_the_other_is_empty(self):
+        # Single-Leg Pulldown: one cable, so only its own side is populated.
+        self.assertEqual(parsing.set_load({"leftWeights": [17.0, 17.0], "rightWeights": []}, 1), 17.0)
+        self.assertEqual(parsing.set_load({"leftWeights": [], "rightWeights": [16.0, 16.0]}, 2), 16.0)
+
+    def test_unilateral_barbell_set_sums_both_cables(self):
+        # Barbell Split Squat (isBarbell 1, isLeftRight 1), trimmed from a live session: the set is
+        # pinned to one leg but the bar hangs from both cables, 39 + 39 = the real 78.
+        for side in (1, 2):
+            detail = {"weights": [78.0] * 3, "leftWeights": [39.0] * 3, "rightWeights": [39.0] * 3}
+            self.assertEqual(parsing.set_load(detail, side), 78.0)
+
+    def test_unilateral_barbell_session_reports_full_load(self):
+        raw = [{"actionLibraryName": "Barbell Split Squat", "actionLibraryGroupId": 372783364833281,
+                "isBarbell": 1, "isLeftRight": 1, "completionMethod": 1,
+                "finishedReps": [
+                    {"finishedCount": 8, "targetCount": 8, "leftRight": side, "time": 30,
+                     "trainingInfoDetail": {"weights": [78.0] * 3, "leftWeights": [39.0] * 3,
+                                            "rightWeights": [39.0] * 3}}
+                    for side in (1, 2)]}]
+        (squat,) = parsing.parse_list_exercises(raw)
+        self.assertEqual(squat["weights"], [78.0, 78.0])
+        self.assertEqual(squat["volume"], 1248.0)
 
 
 class TestListExercises(unittest.TestCase):

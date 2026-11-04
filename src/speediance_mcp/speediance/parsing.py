@@ -59,15 +59,17 @@ def _heart(value) -> float | None:
 def set_load(detail: dict, side: int | None) -> float | None:
     """The resistance of one set: side arrays first, `weights` only as a fallback.
 
-    A pinned side (1/2) is a unilateral set: that side's array max, alone. Otherwise, when both
-    cables are populated, both carry the load, so the set's resistance is max(left) + max(right) —
-    never zip the two arrays by index, they're independent ragged telemetry series.
+    When both cables are populated, both carry the load, so the set's resistance is
+    max(left) + max(right) — never zip the two arrays by index, they're independent ragged
+    telemetry series. That holds even on a pinned-side (1/2) set: a unilateral barbell movement
+    (Barbell Split Squat) is "left leg" or "right leg" but the bar hangs from both cables. A
+    genuine single-cable unilateral set populates only its own side, so it takes that side's max.
     """
     left = nums(detail.get("leftWeights"))
     right = nums(detail.get("rightWeights"))
-    if side == 1 and left:
+    if side == 1 and left and not right:
         return max(left)
-    if side == 2 and right:
+    if side == 2 and right and not left:
         return max(right)
     if left and right:
         return max(left) + max(right)
