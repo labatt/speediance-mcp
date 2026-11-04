@@ -75,6 +75,7 @@ real training:
 - `get_muscle_balance` includes it, and reports `offMachineDays` / `offMachineSets` separately — it's
   training, but not a session the machine recorded.
 - `get_session_detail` on a manual session serves those exercises and says where they came from.
+- Personal bests in `get_session_detail` are Speediance's own flags (`personalBests`: weight / volume / 1RM), not ones this server computes. Off-machine exercises never carry them.
 - Movements resolve to the library by name, which is what makes them attributable to muscles. One that
   Speediance doesn't stock is still logged and reported as unmatched rather than refused.
 - Single-arm sets keep their side and aren't counted as both; bodyweight work is recorded, not rejected.
@@ -300,7 +301,7 @@ data dir; `create_workout` and `update_workout` flag any avoided exercise they w
 |---|---|
 | `check_connection` | Verify the Speediance login is live |
 | `get_calendar` | A month's scheduled and completed sessions |
-| `get_session_detail` | One session's per-exercise log — sets, reps, weights; rowing pace/power; guided-cardio intervals |
+| `get_session_detail` | One session's per-exercise log — sets, reps, weights; rowing pace/power; guided-cardio intervals; Speediance's own personal-best flags (weight / volume / 1RM) per exercise |
 | `get_heart_rate` | A watch-paired session's heart-rate curve and summary |
 | `get_training_stats` | Totals between two dates |
 | `get_athlete_snapshot` | Profile, coaching memory and recent sessions in one call |

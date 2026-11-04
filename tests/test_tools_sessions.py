@@ -125,6 +125,20 @@ class TestSessionDetail(unittest.TestCase):
         self.assertIn("cardio", got)
         self.assertNotIn("note", got)
 
+    def test_personal_bests_are_listed_per_exercise_and_summarised(self):
+        routes = fx.standard_routes()
+        routes[("GET", fx.DETAIL + "cttTrainingInfoDetail/5001")] = fx.CTT_5001_PB
+        app, _ = make_app(self, routes)
+        got = sessions.get_session_detail(app, 5001)
+        self.assertEqual(got["exercises"][0]["personalBests"], ["weight", "volume"])
+        self.assertEqual(got["personalBests"], [{"exercise": "Barbell Bent Over Row",
+                                                 "kinds": ["weight", "volume"]}])
+
+    def test_session_without_flags_has_an_empty_summary(self):
+        app, _ = make_app(self)
+        for training_id in (5001, 6001):
+            self.assertEqual(sessions.get_session_detail(app, training_id)["personalBests"], [])
+
     def test_free_lift(self):
         app, _ = make_app(self)
         got = sessions.get_session_detail(app, 6001)

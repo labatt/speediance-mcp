@@ -45,6 +45,12 @@ def get_calendar(app, month: str) -> dict:
     return {"month": month, "displayUnit": app.api.unit, "days": [by_date[k] for k in sorted(by_date) if k]}
 
 
+def personal_best_summary(exercises: list[dict]) -> list[dict]:
+    """[{exercise, kinds}] for the exercises Speediance flagged; empty when none."""
+    return [{"exercise": ex["name"], "kinds": ex["personalBests"]}
+            for ex in exercises if ex.get("personalBests")]
+
+
 def _heart_rate_present(exercises: list[dict]) -> bool:
     return any(entry.get("maxHeartRate") for ex in exercises for entry in ex["setLog"])
 
@@ -56,7 +62,16 @@ def get_session_detail(app, training_id: int, type: int = 0) -> dict:
     history. Rowing/ski sessions add `cardio` (pace per 500m, speed, watts, calories/min); guided
     cardio adds per-interval rows, and rowing with recorded telemetry adds `rowing` — per-block
     stroke rate, pace, watts and how much of each block stayed inside its target stroke-rate band.
-    Weights are already in displayUnit — never convert."""
+    Weights are already in displayUnit — never convert.
+
+    Each exercise carries personalBests — a subset of ["weight", "volume", "1RM"] — and the reply has a
+    session-level personalBests summary [{exercise, kinds}]. These are Speediance's OWN flags, set when
+    the session was saved: heaviest weight, most volume or best estimated 1RM for that movement at that
+    time. They do not mean it is still the all-time best, and they are not ours (get_strength_profile
+    computes its own estimates). Only custom-template sessions carry them; Free Lift and off-machine
+    exercises always show none, which means "no flag available", not "no PB". Speediance's figures are
+    measured force and the session carries no set-mode field, so a chain-mode set logs a higher weight
+    than its setting and can set a weight or volume PB: treat those two with care on chain work."""
     try:
         record = app.api.find_session(training_id)
     except SessionNotFound:
@@ -73,7 +88,7 @@ def get_session_detail(app, training_id: int, type: int = 0) -> dict:
         out = {"trainingId": int(record["trainingId"]), "title": record.get("title"),
                "date": date, "detailType": "manual",
                "resolvedType": True, "sessionType": MANUAL_TYPE, "displayUnit": app.api.unit,
-               "exercises": exercises, "warnings": [],
+               "exercises": exercises, "warnings": [], "personalBests": [],
                "durationSec": int(record.get("trainingTime") or 0),
                "calories": record.get("calorie"),
                "exerciseSource": "offmachine" if exercises else "none"}
@@ -96,6 +111,7 @@ def get_session_detail(app, training_id: int, type: int = 0) -> dict:
            "date": str(record.get("startTime", ""))[:10], "detailType": route, "resolvedType": True,
            "sessionType": record.get("type"), "displayUnit": app.api.unit,
            "exercises": parsed["exercises"], "warnings": parsed["warnings"],
+           "personalBests": personal_best_summary(parsed["exercises"]),
            "heartRateAvailable": bool(find_uuid(route, payload)) and _heart_rate_present(parsed["exercises"])}
     if isinstance(payload, dict) and payload.get("showHeartGraph") and find_uuid(route, payload):
         out["heartRateAvailable"] = True
