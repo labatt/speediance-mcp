@@ -318,9 +318,9 @@ data dir; `create_workout` and `update_workout` flag any avoided exercise they w
 | `create_workout` | Create a workout (verified by reading it back) |
 | `update_workout` | Edit a workout in place |
 | `delete_workout` | Delete a workout |
-| `schedule_workout` | Put a workout on a day |
-| `unschedule_workout` | Take a workout off a day |
-| `browse_programs` | Speediance's official programs |
+| `schedule_workout` | Put a workout, or one of Speediance's official courses, on a day |
+| `unschedule_workout` | Take a workout or course off a day |
+| `browse_programs` | Speediance's official programs and courses, with the course codes to schedule them |
 | `get_preferences` | The coaching memory |
 | `set_preferences` | Goal, training days, session length, load anchors, owned and unusable equipment |
 | `remember_fact` | Save one curated fact: a hard/soft constraint, preference, goal or observation (max 600 characters; near-duplicates are refused; `supersedes` replaces older facts) |

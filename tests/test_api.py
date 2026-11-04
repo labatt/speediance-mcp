@@ -146,3 +146,20 @@ class TestAPI(unittest.TestCase):
         api.reserve("2026-09-01", "a" * 24, 1)
         body = json.loads(fake.calls("POST", fx.RESERVE_PATH)[0].content)
         self.assertEqual(body, {"status": 1, "deviceType": 1, "thatDay": "2026-09-01", "templateCode": "a" * 24})
+
+    def test_reserve_course_body(self):
+        api, fake, _ = self.make(fx.course_booking_routes({}))
+        api.reserve_course("2026-09-01", "c" * 24, 1)
+        api.reserve_course("2026-09-01", "c" * 24, 0)
+        bodies = [json.loads(r.content) for r in fake.calls("POST", fx.COURSE_RESERVE_PATH)]
+        self.assertEqual(bodies, [{"status": s, "deviceType": 1, "thatDay": "2026-09-01", "courseCode": "c" * 24}
+                                  for s in (1, 0)])
+
+    def test_courses_page_by_device_and_are_cached(self):
+        rows = [{"id": i, "code": f"{i:024x}", "courseTitle": f"Course {i}"} for i in range(150)]
+        api, fake, _ = self.make({("GET", fx.COURSES_PATH): fx.course_page_route(rows)})
+        self.assertEqual(len(api.courses()), 150)
+        api.courses()
+        calls = fake.calls("GET", fx.COURSES_PATH)
+        self.assertEqual([c.url.params["pageNo"] for c in calls], ["1", "2"])
+        self.assertEqual({c.url.params["deviceTypes"] for c in calls}, {"1"})

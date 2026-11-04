@@ -20,7 +20,8 @@ def get_calendar(app, month: str) -> dict:
     """What's scheduled and trained in a month (`month` = 'YYYY-MM'). Each day carries its
     trainingPlanList. The raw calendar feed hides completed custom-template sessions, so completed
     sessions from the history feed are merged in with source:"history"; pass their trainingId to
-    get_session_detail. Reservations (isReservation:true) are scheduled templates. Activity imported
+    get_session_detail. Reservations (isReservation:true) are scheduled templates (templateReservationId)
+    or booked official courses (courseReservationId; its `code` is the course_code). Activity imported
     from the user's phone health app (walks, rides, other off-machine work that reached Speediance)
     is listed per day under otherActivities — count it in weekly load, but it isn't a gym session.
     Speediance only holds what the phone synced; other sources (e.g. a wellness app) may have more."""

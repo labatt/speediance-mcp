@@ -16,6 +16,7 @@ HISTORY_START = "2020-01-01"
 HISTORY_TTL = 600.0
 LIBRARY_TTL = 24 * 3600.0
 LIBRARY_BATCH = 50
+COURSE_PAGE = 100  # the course page answers a server error at 500
 STATS_PAGE = 50
 
 
@@ -32,6 +33,7 @@ class SpeedianceAPI:
         self._clock = clock
         self._history_cache: tuple[float, dict[int, dict]] | None = None
         self._accessories: list[dict] | None = None
+        self._courses: tuple[float, list[dict]] | None = None
         self._lock = threading.Lock()
         self._library_lock = threading.Lock()
 
@@ -154,6 +156,12 @@ class SpeedianceAPI:
         return self.client.post("/api/app/templateReservation", {
             "status": int(status), "deviceType": self.device_type, "thatDay": date, "templateCode": code})
 
+    def reserve_course(self, date: str, code: str, status: int) -> Any:
+        """Book (1) or remove (0) an official course by its `code`. Verified live 2026-09-30: `data`
+        is true, and the booking shows in the month calendar as type 1 with courseReservationId."""
+        return self.client.post("/api/app/courseReservation", {
+            "status": int(status), "deviceType": self.device_type, "thatDay": date, "courseCode": code})
+
     # --- exercise library ----------------------------------------------------
     def accessories(self) -> list[dict]:
         if self._accessories is None:
@@ -223,3 +231,21 @@ class SpeedianceAPI:
 
     def program(self, program_id) -> dict:
         return self.client.get(f"/api/app/exclusivePlan/{int(program_id)}") or {}
+
+    def courses(self) -> list[dict]:
+        """Official single courses for this device (~500), cached for 24 hours. `deviceTypes` (plural)
+        is the filter that works; `deviceType` is ignored and returns every device's courses."""
+        cached = self._courses
+        if cached and self._clock() - cached[0] < LIBRARY_TTL:
+            return cached[1]
+        out: list[dict] = []
+        page = 1
+        while True:
+            rows = self.client.get("/api/app/v2/course/page", params={
+                "pageNo": page, "pageSize": COURSE_PAGE, "deviceTypes": self.device_type}) or []
+            out.extend(r for r in rows if isinstance(r, dict))
+            if len(rows) < COURSE_PAGE:
+                break
+            page += 1
+        self._courses = (self._clock(), out)
+        return out
