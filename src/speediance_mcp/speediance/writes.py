@@ -3,9 +3,10 @@
 Write-fault rules: totalCapacity is never null; every movement is sent with templatePresetId -1
 (the app's "Customize" mode, where the machine runs the per-set weights and modes); on a kg account
 the server reads a -1 movement's weights and capacity as pounds, so wire_body sends them x2.2, and
-totalCapacity x2.2 always; unilateral movements auto-alternate sides; counterweight2 is always
-empty; a kg account's loads are 0.5 kg steps below 10 kg and whole kg from 10 up to 100
-(validate_sets with unit="kg"); every write is verified by reading the template back.
+totalCapacity x2.2 always; unilateral movements auto-alternate sides; an RM movement is sent at its
+RM preset with the per-set RMs in counterweight2 (empty otherwise); a kg account's loads are 0.5 kg
+steps below 10 kg and whole kg from 10 up to 100 (validate_sets with unit="kg"); every write is
+verified by reading the template back.
 """
 
 from __future__ import annotations
@@ -34,6 +35,17 @@ PRESET_NAMES = {-1: "Customize", 1: "Gain Muscle", 3: "Stamina", 5: "Strength"}
 # eccentric set is not stored anywhere: the user dials it in on the machine.
 SET_MODES = {"standard": 1, "chain": 2, "eccentric": 3}
 MODE_NAMES = {code: name for name, code in SET_MODES.items()}
+# RM loads. A movement written at one of the app's presets with per-set RMs in `counterweight2` makes
+# Speediance work out each set's load from the user's strength data and overwrite `weights` (verified
+# live on a kg account 2026-11-06: "8,8,8" at preset 5 was stored as sent, with the weights replaced).
+# With no session history yet it resolved every RM to the machine's minimum (barbell 9 kg, handles
+# 4.5 kg). Each preset only takes certain reps/RM pairs — the ranges every
+# movement's `templatePresetList` reports (trainingCountScope / weightScope), so a 12-rep set can be
+# at most 13RM: (templatePresetId, reps range, RM range).
+RM_PRESETS = {"gain_muscle": (1, (8, 12), (9, 13)), "strength": (5, (2, 8), (4, 9)),
+              "stamina": (3, (13, 20), (15, 20))}
+RM_PRESET_IDS = {pid for pid, _, _ in RM_PRESETS.values()}
+RM_PLACEHOLDER_WEIGHT = 3.5  # an RM set's `weights` entry when none is given; Speediance replaces it
 
 
 def _int(value, default=0) -> int:
@@ -146,6 +158,48 @@ def _kg_load(weight: float, number: int) -> None:
                          f"{high}, and the user can fine-tune the load on the machine")
 
 
+def _rm_weight(value) -> float:
+    """An RM set's `weights` entry: only a fallback Speediance overwrites, so the given weight rounded
+    to 0.1 (a read-back load can carry more decimals) or a placeholder — never a validation error."""
+    if isinstance(value, bool):
+        return RM_PLACEHOLDER_WEIGHT
+    try:
+        weight = float(value)
+    except (TypeError, ValueError):
+        return RM_PLACEHOLDER_WEIGHT
+    if not math.isfinite(weight) or not 0 < weight <= MAX_WEIGHT:
+        return RM_PLACEHOLDER_WEIGHT
+    return round(weight, 1)
+
+
+def rm_preset_for(sets: list[dict], requested=None) -> int | None:
+    """The RM preset (templatePresetId) for a movement whose sets carry "rm", or None for a weight-based
+    one. A movement is one or the other: every set has an rm, or none does. Every set's reps and RM must
+    fit the preset's ranges; with no `requested` preset (an RM_PRESETS name or id), the first that fits,
+    in RM_PRESETS order."""
+    with_rm = [s for s in sets if s.get("rm") is not None]
+    if not with_rm:
+        if requested not in (None, ""):
+            raise ValueError("rm_preset needs an rm on every set")
+        return None
+    if len(with_rm) != len(sets):
+        raise ValueError("give an rm on every set or on none: a movement is either RM-based or weight-based")
+    if requested not in (None, ""):
+        key = str(requested).strip().lower().replace(" ", "_")
+        names = [key] if key in RM_PRESETS else [n for n, (pid, _, _) in RM_PRESETS.items() if str(pid) == key]
+        if not names:
+            raise ValueError(f"rm_preset must be one of {', '.join(RM_PRESETS)}")
+    else:
+        names = list(RM_PRESETS)
+    for name in names:
+        pid, (reps_lo, reps_hi), (rm_lo, rm_hi) = RM_PRESETS[name]
+        if all(reps_lo <= s["reps"] <= reps_hi and rm_lo <= s["rm"] <= rm_hi for s in sets):
+            return pid
+    ranges = "; ".join(f"{n}: reps {r[0]}-{r[1]}, RM {m[0]}-{m[1]}" for n, (_, r, m) in RM_PRESETS.items()
+                       if n in names)
+    raise ValueError(f"these reps/RM pairs fit no Speediance RM preset ({ranges})")
+
+
 def validate_sets(kind: str, sets, default_rest: int = 60, *, unit: str | None = None) -> list[dict]:
     """Sets as the builder takes them. unit="kg" also enforces the kg template grid; the rebuild of a
     stored template leaves it out, so loads Speediance already holds go back unchanged."""
@@ -164,6 +218,18 @@ def validate_sets(kind: str, sets, default_rest: int = 60, *, unit: str | None =
             raise ValueError(f"set {number}: rest must be 0-600 seconds")
         if kind == "reps":
             reps = _whole(raw, "reps", number)
+            if raw.get("rm") is not None:
+                if not 1 <= reps <= 100:
+                    raise ValueError(f"set {number}: reps must be 1-100")
+                rm = _whole(raw, "rm", number)
+                if not 1 <= rm <= 30:
+                    raise ValueError(f"set {number}: rm must be 1-30")
+                if rm < reps:
+                    raise ValueError(f"set {number}: a {rm}RM load can't be lifted {reps} times, so rm must be "
+                                     "at least reps")
+                out.append({"reps": reps, "weight": _rm_weight(raw.get("weight")), "side": side, "rest": rest,
+                            "mode": mode, "rm": rm})
+                continue
             weight = _weight(raw, number)
             if not 1 <= reps <= 100:
                 raise ValueError(f"set {number}: reps must be 1-100")
@@ -171,6 +237,8 @@ def validate_sets(kind: str, sets, default_rest: int = 60, *, unit: str | None =
                 _kg_load(weight, number)
             out.append({"reps": reps, "weight": weight, "side": side, "rest": rest, "mode": mode})
         else:
+            if raw.get("rm") is not None:
+                raise ValueError(f"set {number}: rm applies to reps sets only")
             seconds = _whole(raw, "seconds", number)
             if not 1 <= seconds <= 3600:
                 raise ValueError(f"set {number}: this movement is timed, so give seconds (1-3600)")
@@ -207,13 +275,14 @@ def build_template(name: str, specs: list[dict], *, unit: str, device_type: int,
     for spec in specs:
         sets, kind = spec["sets"], spec["kind"]
         timed = kind != "reps"
+        rm_preset = None if timed else spec.get("rmPreset")
         capacity = 0.0 if timed else sum(s["reps"] * s["weight"] for s in sets)
         total += capacity
         rests = ",".join(str(s["rest"]) for s in sets)
         actions.append({
             "groupId": int(spec["groupId"]),
             "actionLibraryId": int(spec["variantId"]),
-            "templatePresetId": CUSTOMIZE_PRESET,
+            "templatePresetId": int(rm_preset) if rm_preset is not None else CUSTOMIZE_PRESET,
             "setsAndReps": ",".join(str(s["seconds"] if timed else s["reps"]) for s in sets),
             "breakTime": rests,
             "breakTime2": rests,
@@ -223,7 +292,7 @@ def build_template(name: str, specs: list[dict], *, unit: str, device_type: int,
             "completionMethod": ",".join(("2" if timed else "1") for _ in sets),
             "countType": ",".join(("2" if timed else "1") for _ in sets),
             "weights": ",".join(("0" if timed else f"{s['weight']:.1f}") for s in sets),
-            "counterweight2": "",
+            "counterweight2": ",".join(str(s["rm"]) for s in sets) if rm_preset is not None else "",
             "counterweight": "",
             "level": ",".join((str(s["level"]) if kind == "level" else "0") for s in sets),
             "capacity": round(capacity, 1),
@@ -262,16 +331,21 @@ def read_template(detail: dict) -> dict:
         counts, weights = _csv(action.get("setsAndReps")), _csv(action.get("weights"))
         levels, sides = _csv(action.get("level")), _csv(action.get("leftRight"))
         modes = _csv(action.get("sportMode"))
+        rms = _csv(action.get("counterweight2"))
         rests = _csv(action.get("breakTime2") or action.get("breakTime"))
         sets = []
         for i, count in enumerate(counts):
             side = _int(sides[i]) if i < len(sides) else 0
-            sets.append({"count": _int(count),
-                         "weight": _float(weights[i]) if i < len(weights) else None,
-                         "level": _int(levels[i]) if i < len(levels) else 0,
-                         "side": side if side in (1, 2) else None,
-                         "rest": _int(rests[i], None) if i < len(rests) else None,
-                         "mode": _int(modes[i], 1) or 1 if i < len(modes) else 1})
+            item = {"count": _int(count),
+                    "weight": _float(weights[i]) if i < len(weights) else None,
+                    "level": _int(levels[i]) if i < len(levels) else 0,
+                    "side": side if side in (1, 2) else None,
+                    "rest": _int(rests[i], None) if i < len(rests) else None,
+                    "mode": _int(modes[i], 1) or 1 if i < len(modes) else 1}
+            rm = _int(rms[i], 0) if i < len(rms) else 0
+            if rm > 0:  # only on RM sets, so weight sets read back exactly as before
+                item["rm"] = rm
+            sets.append(item)
         exercises.append({"name": action.get("title") or "", "actionLibraryId": action.get("actionLibraryId"),
                           "presetId": action.get("templatePresetId"),
                           "presetName": PRESET_NAMES.get(_int(action.get("templatePresetId"), None)),
@@ -286,8 +360,11 @@ def sets_for_kind(kind: str, stored_sets: list[dict], default_rest: int = 60) ->
     for s in stored_sets:
         rest = s["rest"] if s["rest"] is not None else default_rest
         if kind == "reps":
-            out.append({"reps": s["count"], "weight": s["weight"] or 0.0, "side": s["side"], "rest": rest,
-                        "mode": s["mode"]})
+            item = {"reps": s["count"], "weight": s["weight"] or 0.0, "side": s["side"], "rest": rest,
+                    "mode": s["mode"]}
+            if s.get("rm"):
+                item["rm"] = s["rm"]
+            out.append(item)
         else:
             out.append({"seconds": s["count"], "level": (s["level"] or None) if kind == "level" else None,
                         "side": s["side"], "rest": rest, "mode": s["mode"]})
@@ -307,11 +384,17 @@ def verify(body: dict, stored: dict | None) -> list[str]:
             problems.append(f"{label}: exercise sent {s['actionLibraryId']} but stored {g.get('actionLibraryId')}")
         if _csv(s["setsAndReps"]) != _csv(g.get("setsAndReps")):
             problems.append(f"{label}: reps/seconds sent {s['setsAndReps']} but stored {g.get('setsAndReps')}")
-        sent_w = [_float(x) or 0.0 for x in _csv(s["weights"])]
-        got_w = [_float(x) or 0.0 for x in _csv(g.get("weights"))]
-        if got_w or any(sent_w):
-            if len(sent_w) != len(got_w) or any(abs(a - b) > 0.05 for a, b in zip(sent_w, got_w)):
-                problems.append(f"{label}: weights sent {s['weights']} but stored {g.get('weights')}")
+        sent_rm = _csv(s.get("counterweight2"))
+        if sent_rm:
+            # Speediance replaces an RM set's weights with the load it works out, so check the RMs.
+            if [_int(x) for x in sent_rm] != [_int(x) for x in _csv(g.get("counterweight2"))]:
+                problems.append(f"{label}: RM sent {s['counterweight2']} but stored {g.get('counterweight2')}")
+        else:
+            sent_w = [_float(x) or 0.0 for x in _csv(s["weights"])]
+            got_w = [_float(x) or 0.0 for x in _csv(g.get("weights"))]
+            if got_w or any(sent_w):
+                if len(sent_w) != len(got_w) or any(abs(a - b) > 0.05 for a, b in zip(sent_w, got_w)):
+                    problems.append(f"{label}: weights sent {s['weights']} but stored {g.get('weights')}")
         sent_sides, got_sides = _csv(s["leftRight"]), _csv(g.get("leftRight"))
         if (got_sides or any(_int(x) for x in sent_sides)) and sent_sides != got_sides:
             problems.append(f"{label}: sides sent {s['leftRight']} but stored {g.get('leftRight')}")

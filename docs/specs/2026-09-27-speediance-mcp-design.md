@@ -515,7 +515,7 @@ Found while grounding the implementation plan against the live API and the curre
    a list of the accessory catalog's small ids; owned equipment is stored by name (§6).
 5. Template writes use the Customize preset (-1) with a unit-dependent wire format (lb and kg verified) (§8.3).
 6. Free Lift sets are unscaled on lb accounts (verified ratio 1.0) (§8.4).
-7. RM presets are out of scope for phase 1 (§6).
+7. RM presets were out of scope for phase 1 (§6); per-set `rm` (counterweight2 at an RM preset) was added later.
 
 Recorded after the phase-1 final review (2026-09-27):
 
