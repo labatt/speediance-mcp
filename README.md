@@ -340,9 +340,10 @@ The other 13 are new: `get_heart_rate`, `get_training_stats`, `compare_sessions`
 `list_accessories`, `unschedule_workout`, `browse_programs`, `list_facts`, `import_facts`,
 `get_muscle_balance`, `log_off_machine_workout`, `get_off_machine_log` and `delete_off_machine_day`.
 `set_preferences`,
-`suggest_load` and `create_workout` take simpler inputs: typed preference fields instead of one JSON blob, and
-no Dynamic Weight modes or RM presets yet. `remember_fact` and `forget_fact` differ from GM Manager's (see
-below).
+`suggest_load` and `create_workout` take simpler inputs: typed preference fields instead of one JSON blob.
+Sets take per-set standard, chain and eccentric modes (the overload is dialled in on the machine) and RM loads
+(`"rm": 8`; the RM preset is picked from the reps/RM pairs the app allows, or set with `rm_preset`).
+`remember_fact` and `forget_fact` differ from GM Manager's (see below).
 
 **Coaching facts** are curated rather than free text. Each fact has a `kind` — a `constraint` (with `severity`
 `hard` or `soft`), a `preference`, a `goal` or an `observation` — and a `category` (`injury`, `equipment`,

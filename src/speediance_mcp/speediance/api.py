@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from .client import NotFound, Rejected, SpeedianceClient, SpeedianceError, WrongNamespace
 from .routes import FREE_INTERVALS_ROUTE, SUMMARY_ROUTES, detail_path, routes_to_try
+from .writes import wire_body
 
 HISTORY_START = "2020-01-01"
 HISTORY_TTL = 600.0
@@ -145,7 +146,8 @@ class SpeedianceAPI:
         return self.client.get("/api/app/v3/customTrainingTemplate/detailByCode", params={"code": code})
 
     def save_template(self, body: dict) -> Any:
-        return self.client.post("/api/app/v2/customTrainingTemplate", body)
+        """Save a build_template body, which is in the display unit; wire_body converts it."""
+        return self.client.post("/api/app/v2/customTrainingTemplate", wire_body(body, self.unit))
 
     def delete_template(self, template_id) -> None:
         self.client.delete("/api/app/customTrainingTemplate", params={"ids": int(template_id)})

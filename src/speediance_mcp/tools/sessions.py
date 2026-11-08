@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime as dt
+
 from mcp.server.mcpserver.exceptions import ToolError
 
 from ..speediance.api import SessionNotFound
@@ -9,11 +11,19 @@ from ..speediance.parsing import (
     rowing_telemetry, session_uuid,
 )
 from ..speediance.routes import FREE_ROUTE, MANUAL_TYPE
+from ..speediance.writes import mode_name, read_template
 from ._common import is_health_import, other_activity, parse_date, parse_month, session_exercises
 
 ROWING_GAP_NOTE = ("No per-interval detail for this session: it has no rowing telemetry and isn't a "
                    "guided cardio session, so only the totals above are available.")
 HR_POINTS = 600
+# After a session Speediance rewrites its template to what was run, modes included; the rewrite's
+# updateTime lands a second after the session's createTime (live, 2026-09-30). Allow some slack.
+WRITEBACK_SLACK = dt.timedelta(minutes=2)
+MODE_HINT_NOTE = ("modeHint is each set's mode (standard/chain/eccentric) read from the source template, "
+                  "which Speediance rewrites to what was run after every session. It's only given when this "
+                  "is that template's most recent session and the template hasn't been edited since. The "
+                  "overload amount isn't recorded anywhere.")
 
 
 def get_calendar(app, month: str) -> dict:
@@ -56,7 +66,13 @@ def get_session_detail(app, training_id: int, type: int = 0) -> dict:
     history. Rowing/ski sessions add `cardio` (pace per 500m, speed, watts, calories/min); guided
     cardio adds per-interval rows, and rowing with recorded telemetry adds `rowing` — per-block
     stroke rate, pace, watts and how much of each block stayed inside its target stroke-rate band.
-    Weights are already in displayUnit — never convert."""
+    Weights are already in displayUnit — never convert.
+    Set modes: a session records no mode (standard/chain/eccentric) and no overload amount. Per-rep
+    weights are measured force, so a chain set's weight (and the exercise's topWeight) reads above
+    the load that was set, and an eccentric set shows only the concentric load. The only record of
+    which sets were chain or eccentric is the source template, which Speediance rewrites after each
+    session; when that record still belongs to this session, each exercise carries `modeHint` per
+    set. Without modeHint the modes are unknown — don't assume standard for a surprising weight."""
     try:
         record = app.api.find_session(training_id)
     except SessionNotFound:
@@ -97,6 +113,8 @@ def get_session_detail(app, training_id: int, type: int = 0) -> dict:
            "sessionType": record.get("type"), "displayUnit": app.api.unit,
            "exercises": parsed["exercises"], "warnings": parsed["warnings"],
            "heartRateAvailable": bool(find_uuid(route, payload)) and _heart_rate_present(parsed["exercises"])}
+    if _add_mode_hints(app, record, out["exercises"]):
+        out["modeHintNote"] = MODE_HINT_NOTE
     if isinstance(payload, dict) and payload.get("showHeartGraph") and find_uuid(route, payload):
         out["heartRateAvailable"] = True
     if is_cardio(summary) or is_cardio(record):
@@ -116,6 +134,46 @@ def get_session_detail(app, training_id: int, type: int = 0) -> dict:
         if not guided and not out.get("intervals") and not out.get("rowing"):
             out["note"] = ROWING_GAP_NOTE
     return out
+
+
+def _time(value) -> dt.datetime | None:
+    try:
+        return dt.datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _add_mode_hints(app, record: dict, exercises: list[dict]) -> bool:
+    """Add per-set `modeHint` from the source template's sportMode, only when the template still
+    holds this session's write-back: same template id (a machine edit re-creates the record under a
+    new id), not updated after the write-back, and no later session of it. An exercise gets a hint
+    only when its set count matches the template's and no set was skipped. True when any did."""
+    template_id, created = record.get("templateId"), _time(record.get("createTime"))
+    if not template_id or created is None:
+        return False
+    started = str(record.get("startTime") or "")
+    if any(r.get("templateId") == template_id and str(r.get("startTime") or "") > started
+           for r in app.api.history_index().values()):
+        return False
+    row = next((r for r in app.api.templates() if r.get("id") == template_id), None)
+    detail = app.api.template(row["code"]) if row else None
+    updated = _time((detail or {}).get("updateTime"))
+    if not detail or detail.get("id") != template_id or updated is None or updated > created + WRITEBACK_SLACK:
+        return False
+    movements = sorted(detail.get("actionLibraryList") or [], key=lambda a: a.get("sort") or 0)
+    stored = read_template(detail)["exercises"]
+    hinted = False
+    for exercise in exercises:
+        index = next((i for i, a in enumerate(movements) if a.get("groupId") == exercise.get("groupId")), None)
+        if index is None:
+            continue
+        movements.pop(index)
+        sets = stored.pop(index)["sets"]
+        if exercise.get("skippedSets") or len(sets) != exercise.get("sets"):
+            continue
+        exercise["modeHint"] = [mode_name(s["mode"]) for s in sets]
+        hinted = True
+    return hinted
 
 
 def _rowing_present(*sources) -> bool:

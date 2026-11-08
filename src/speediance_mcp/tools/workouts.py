@@ -4,12 +4,14 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from ..library import accessory_names, summarize_exercise, variant_id
 from ..speediance.client import Rejected
-from ..speediance.writes import build_template, read_template, sets_for_kind, validate_sets, verify
+from ..speediance.writes import (RM_PRESET_IDS, build_template, mode_name, read_template, rm_preset_for,
+                                 sets_for_kind, validate_sets, verify)
 from ._common import resolve_group
 
 MAX_NAME = 60
-# templatePresetId values whose stored weights are the real, explicit loads (lb: -1, kg: 1).
-# Any other preset is a Speediance preset/RM load whose stored weights can't be rebuilt safely.
+# templatePresetId values whose stored weights are the real, explicit loads: -1 is the app's
+# "Customize" mode, and 0/1 are what older writes of this server sent. Any other preset is a
+# Speediance preset/RM load whose stored weights can't be rebuilt safely.
 EXPLICIT_PRESETS = (-1, 0, 1)
 
 
@@ -53,7 +55,13 @@ def list_my_workouts(app) -> dict:
 
 def get_workout(app, code: str) -> dict:
     """A template's full prescription: exercises in order, each set's reps (or seconds), weight,
-    Vita level, side and rest. Weights are in displayUnit."""
+    Vita level, side, rest and mode ("standard", "chain" or "eccentric"; an unknown code stays a
+    number). Weights are in displayUnit. The chain/eccentric overload isn't stored — the user dials
+    it in on the machine. After a session Speediance rewrites the template to what was actually run,
+    modes included. presetId -1 (presetName "Customize") is where the machine runs these weights; a
+    positive presetId is an app preset (Gain Muscle, Stamina, Strength), where the machine sets the
+    load from the preset and the user's 1RM, so the stored weights are not what it runs; such a set
+    shows its "rm" (e.g. 8 = the load the user could lift 8 times) when the template carries one."""
     row = _row_by_code(app, code)
     detail = app.api.template(row["code"])
     if not detail:
@@ -65,6 +73,8 @@ def get_workout(app, code: str) -> dict:
         if raw:
             exercise["kind"] = summarize_exercise(raw)["kind"]
             exercise["sets"] = sets_for_kind(exercise["kind"], exercise["sets"])
+        for s in exercise["sets"]:
+            s["mode"] = mode_name(s["mode"])
     return {**workout, "displayUnit": app.api.unit}
 
 
@@ -92,11 +102,12 @@ def _resolve_specs(app, exercises) -> list[dict]:
         raw_rest = exercise.get("rest_seconds")
         rest_seconds = 60 if raw_rest is None else _as_int(raw_rest, "rest_seconds", number)
         try:
-            sets = validate_sets(item["kind"], exercise.get("sets"), rest_seconds)
+            sets = validate_sets(item["kind"], exercise.get("sets"), rest_seconds, unit=app.api.unit)
+            rm_preset = rm_preset_for(sets, exercise.get("rm_preset"))
         except ValueError as exc:
             raise ToolError(f"{item['name']}: {exc}.") from None
         specs.append({"groupId": item["groupId"], "variantId": vid, "name": item["name"], "kind": item["kind"],
-                      "unilateral": item["unilateral"], "sets": sets})
+                      "unilateral": item["unilateral"], "sets": sets, "rmPreset": rm_preset})
     return specs
 
 
@@ -110,9 +121,13 @@ def _specs_from_stored(app, detail: dict) -> list[dict]:
             raise ToolError(f"Can't rebuild '{exercise['name']}' — it's no longer in the library. "
                             "Pass the full exercises list instead.")
         item = summarize_exercise(raw, names)
-        preset_load = not _explicit_preset(exercise.get("presetId"))
-        if item["kind"] == "reps" and not preset_load:
-            preset_load = any(not s["weight"] for s in exercise["sets"])
+        # An RM movement (an RM preset with an RM on every set) rebuilds from its RMs.
+        rm_preset = _int_or_none(exercise.get("presetId"))
+        rm_based = (item["kind"] == "reps" and rm_preset in RM_PRESET_IDS and bool(exercise["sets"])
+                    and all(s.get("rm") for s in exercise["sets"]))
+        preset_load = not rm_based and not _explicit_preset(exercise.get("presetId"))
+        if item["kind"] == "reps" and not rm_based and not preset_load:
+            preset_load = any(not s["weight"] or s.get("rm") for s in exercise["sets"])
         if preset_load:
             raise ToolError(f"Can't safely rebuild '{item['name']}' — it was built with a Speediance preset/RM load "
                             "(or has no stored weight), so a name-only update could zero its loads; "
@@ -125,9 +140,16 @@ def _specs_from_stored(app, detail: dict) -> list[dict]:
                             "pass the full exercises list instead.") from None
         specs.append({"groupId": item["groupId"], "variantId": exercise["actionLibraryId"], "name": item["name"],
                       "kind": item["kind"], "unilateral": item["unilateral"], "sets": validated,
-                      "sportMode": exercise.get("sportMode"),
+                      "rmPreset": rm_preset if rm_based else None,
                       "selectCompletionMethod": exercise.get("selectCompletionMethod")})
     return specs
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _avoided_flags(app, specs: list[dict]) -> dict:
@@ -177,8 +199,20 @@ def create_workout(app, name: str, exercises: list[dict]) -> dict:
     """Create a custom workout template. `exercises` is an ordered list of
     {"name": "..." or "group_id": N, "sets": [...], "rest_seconds": 60}. Sets by movement kind:
     reps -> {"reps": 10, "weight": 50}; timed -> {"seconds": 45}; Vita (level) -> {"seconds": 30, "level": 12}.
-    Optional per set: "side" 1=left / 2=right (unilateral moves alternate automatically), "rest".
-    Weights are in displayUnit. The template is read back after saving; verified:false means Speediance
+    Optional per set: "side" 1=left / 2=right (unilateral moves alternate automatically), "rest",
+    "mode" "standard" (default) / "chain" / "eccentric". The chain or eccentric overload amount can't
+    be set through the API or stored in the template — tell the user to dial it in on the machine.
+    Weights are in displayUnit, and the template is saved in the app's "Customize" mode, so the
+    machine runs exactly these weights and modes. On a kg account a load is a 0.5 kg step below 10 kg
+    and whole kg from 10 kg up to 100: above 10 kg templates can't hold half kilos, so round and tell
+    the user they can fine-tune on the machine.
+    RM loads: instead of a weight a reps set can take {"reps": 6, "rm": 8} (the load the user could lift
+    8 times), and Speediance works out the load from the user's strength data, so it rises as they get
+    stronger. A movement is RM on every set or on none. Its preset is picked from the reps/RM pairs the
+    app allows — gain_muscle reps 8-12 / RM 9-13, strength reps 2-8 / RM 4-9, stamina reps 13-20 /
+    RM 15-20 — or set per exercise with "rm_preset". A weight on an RM set is only a fallback. With no
+    session history yet Speediance turns every RM into the machine's minimum load, so warn a new user to
+    set the first sessions' loads on the machine. The template is read back after saving; verified:false means Speediance
     stored something different — tell the user. Never program a ⊘avoided movement unless asked by name.
     The reply carries the user's hardConstraints and legacyUnreviewed facts when there are any.
     Re-check these against the workout before telling the user it's done."""
